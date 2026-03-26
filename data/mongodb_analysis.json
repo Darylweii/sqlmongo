@@ -1,0 +1,395 @@
+{
+  "database": "bjdlzdh",
+  "total_collections": 1580,
+  "unique_types": 38,
+  "source_data_types": {
+    "Ia": {
+      "prefix": "source_data_Ia",
+      "count": 1,
+      "date_range": "202512 ~ 202512"
+    },
+    "Ib": {
+      "prefix": "source_data_Ib",
+      "count": 1,
+      "date_range": "202512 ~ 202512"
+    },
+    "Ic": {
+      "prefix": "source_data_Ic",
+      "count": 1,
+      "date_range": "202512 ~ 202512"
+    },
+    "P": {
+      "prefix": "source_data_P",
+      "count": 1,
+      "date_range": "202512 ~ 202512"
+    },
+    "Ua": {
+      "prefix": "source_data_Ua",
+      "count": 1,
+      "date_range": "202512 ~ 202512"
+    },
+    "Ub": {
+      "prefix": "source_data_Ub",
+      "count": 1,
+      "date_range": "202512 ~ 202512"
+    },
+    "Uc": {
+      "prefix": "source_data_Uc",
+      "count": 1,
+      "date_range": "202512 ~ 202512"
+    },
+    "bms_i": {
+      "prefix": "source_data_bms_i",
+      "count": 63,
+      "date_range": "202009 ~ 202603"
+    },
+    "bms_u": {
+      "prefix": "source_data_bms_u",
+      "count": 63,
+      "date_range": "202009 ~ 202603"
+    },
+    "cbm": {
+      "prefix": "source_data_cbm",
+      "count": 1,
+      "date_range": "202412 ~ 202412"
+    },
+    "cbmui": {
+      "prefix": "source_data_cbmui",
+      "count": 14,
+      "date_range": "202412 ~ 202603"
+    },
+    "dcdcdljl": {
+      "prefix": "source_data_dcdcdljl",
+      "count": 50,
+      "date_range": "202010 ~ 202412"
+    },
+    "dcdfdljl": {
+      "prefix": "source_data_dcdfdljl",
+      "count": 50,
+      "date_range": "202010 ~ 202412"
+    },
+    "dw_i": {
+      "prefix": "source_data_dw_i",
+      "count": 49,
+      "date_range": "202012 ~ 202412"
+    },
+    "dw_u": {
+      "prefix": "source_data_dw_u",
+      "count": 49,
+      "date_range": "202012 ~ 202412"
+    },
+    "ep": {
+      "prefix": "source_data_ep",
+      "count": 61,
+      "date_range": "202012 ~ 202603"
+    },
+    "epzyz": {
+      "prefix": "source_data_epzyz",
+      "count": 61,
+      "date_range": "202012 ~ 202603"
+    },
+    "fz-ep": {
+      "prefix": "source_data_fz-ep",
+      "count": 49,
+      "date_range": "202012 ~ 202412"
+    },
+    "fz_i": {
+      "prefix": "source_data_fz_i",
+      "count": 50,
+      "date_range": "202009 ~ 202412"
+    },
+    "fz_u": {
+      "prefix": "source_data_fz_u",
+      "count": 50,
+      "date_range": "202009 ~ 202412"
+    },
+    "gffddl": {
+      "prefix": "source_data_gffddl",
+      "count": 51,
+      "date_range": "202009 ~ 202412"
+    },
+    "i": {
+      "prefix": "source_data_i",
+      "count": 64,
+      "date_range": "202009 ~ 202603"
+    },
+    "ibph": {
+      "prefix": "source_data_ibph",
+      "count": 62,
+      "date_range": "202012 ~ 202603"
+    },
+    "loadrate": {
+      "prefix": "source_data_loadrate",
+      "count": 2,
+      "date_range": "202102 ~ 202103"
+    },
+    "p": {
+      "prefix": "source_data_p",
+      "count": 63,
+      "date_range": "202009 ~ 202603"
+    },
+    "pv_i": {
+      "prefix": "source_data_pv_i",
+      "count": 49,
+      "date_range": "202012 ~ 202412"
+    },
+    "pv_u": {
+      "prefix": "source_data_pv_u",
+      "count": 50,
+      "date_range": "202009 ~ 202412"
+    },
+    "qf": {
+      "prefix": "source_data_qf",
+      "count": 61,
+      "date_range": "202012 ~ 202603"
+    },
+    "soc": {
+      "prefix": "source_data_soc",
+      "count": 50,
+      "date_range": "202009 ~ 202412"
+    },
+    "t": {
+      "prefix": "source_data_t",
+      "count": 44,
+      "date_range": "202206 ~ 202603"
+    },
+    "thd_i": {
+      "prefix": "source_data_thd_i",
+      "count": 64,
+      "date_range": "202009 ~ 202603"
+    },
+    "thd_v": {
+      "prefix": "source_data_thd_v",
+      "count": 64,
+      "date_range": "202009 ~ 202603"
+    },
+    "tzddc": {
+      "prefix": "source_data_tzddc",
+      "count": 50,
+      "date_range": "202009 ~ 202412"
+    },
+    "tzgdc": {
+      "prefix": "source_data_tzgdc",
+      "count": 50,
+      "date_range": "202009 ~ 202412"
+    },
+    "u": {
+      "prefix": "source_data_u",
+      "count": 1,
+      "date_range": "202309 ~ 202309"
+    },
+    "u_line": {
+      "prefix": "source_data_u_line",
+      "count": 62,
+      "date_range": "202012 ~ 202603"
+    },
+    "u_phase": {
+      "prefix": "source_data_u_phase",
+      "count": 64,
+      "date_range": "202009 ~ 202603"
+    },
+    "ubph": {
+      "prefix": "source_data_ubph",
+      "count": 63,
+      "date_range": "202009 ~ 202603"
+    }
+  },
+  "other_types": {
+    "allHoursCollection": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_dcdcdljl": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_dcdfdljl": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_elec": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_ep": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_epzyz": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_f": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_fz-ep": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_gffddl": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_i": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_loadrate": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_p": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_qf": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_sd": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_t": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "day_data_u_line": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "door_records": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_dcdcdljl": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_dcdfdljl": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_elec": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_ep": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_epzyz": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_fz-ep": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_gffddl": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_i": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_loadrate": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_p": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_qf": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_sd": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_t": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "month_data_u_line": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "ocr_documents": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "ocr_processing_logs": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "parking_records": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "test": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_dcdcdljl": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_dcdfdljl": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_elec": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_ep": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_epzyz": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_fz-ep": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_gffddl": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_i": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_loadrate": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_p": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_qf": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_sd": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_t": {
+      "count": 1,
+      "date_range": "N/A"
+    },
+    "year_data_u_line": {
+      "count": 1,
+      "date_range": "N/A"
+    }
+  }
+}

@@ -1,0 +1,69 @@
+﻿# Environment and secrets
+.env
+env_example.local
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test/cache artifacts
+.pytest_cache/
+.cache/pytest/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+logs/
+tmp_*
+
+# Reports and generated results
+TEST_REPORT_*.md
+test_results_*.json
+ground_truth_test_*.json
+DAG_test_results.json
+
+# Local data indexes / caches
+
+# OS / temp files
+nul
+Thumbs.db
+Desktop.ini
+.cache/
+.tmp_pytest_cache/
+tests/manual/reports/
+*备份.py
+.claude/
+.kiro/

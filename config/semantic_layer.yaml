@@ -1,0 +1,481 @@
+description: 语义层配置 - 设备与项目元数据
+device_types:
+  air_conditioner: 空调
+  elec_meter: 电表
+  environmental_sensor: 环境传感器
+  gas_meter: 燃气表
+  water_meter: 水表
+metric_types:
+  bms_i:
+    description: 电池管理系统电流
+    name: BMS电流
+    synonyms:
+    - 电池电流
+    - BMS电流
+    - 储能电流
+    unit: A
+  bms_u:
+    description: 电池管理系统电压
+    name: BMS电压
+    synonyms:
+    - 电池电压
+    - BMS电压
+    - 储能电压
+    unit: V
+  cbmui:
+    description: 变流箱电压电流
+    name: 变流箱数据
+    synonyms:
+    - 变流箱
+    - 变流器
+    unit: ''
+  dcdcdljl:
+    description: 直流充电累计电量
+    name: 直流充电电量
+    synonyms:
+    - 充电电量
+    - 直流充电
+    - 充电量
+    unit: kWh
+  dcdfdljl:
+    description: 直流放电累计电量
+    name: 直流放电电量
+    synonyms:
+    - 放电电量
+    - 直流放电
+    - 放电量
+    unit: kWh
+  dw_i:
+    description: 低压侧电流
+    name: 低压电流
+    synonyms:
+    - 低压电流
+    - 低压侧电流
+    unit: A
+  dw_u:
+    description: 低压侧电压
+    name: 低压电压
+    synonyms:
+    - 低压电压
+    - 低压侧电压
+    unit: V
+  ep:
+    description: 累计用电量
+    name: 正向有功电能
+    synonyms:
+    - 电量
+    - 用电量
+    - 电费
+    - 耗电量
+    - 正向有功电能
+    - 累计电量
+    - 总电量
+    - 用电情况
+    - 吃电
+    unit: kWh
+  epzyz:
+    description: 正向有功总电能
+    name: 正向有功总电能
+    synonyms:
+    - 总电能
+    - 正向总电能
+    unit: kWh
+  fz-ep:
+    description: 分支回路电量
+    name: 分支电量
+    synonyms:
+    - 分支电量
+    - 回路电量
+    unit: kWh
+  fz_i:
+    description: 分支回路电流
+    name: 分支电流
+    synonyms:
+    - 分支电流
+    - 回路电流
+    unit: A
+  fz_u:
+    description: 分支回路电压
+    name: 分支电压
+    synonyms:
+    - 分支电压
+    - 回路电压
+    unit: V
+  gffddl:
+    description: 光伏累计发电量
+    name: 光伏发电量
+    synonyms:
+    - 光伏发电量
+    - 发电量
+    - 光伏发电
+    - 太阳能发电
+    unit: kWh
+  i:
+    description: 三相电流
+    name: 电流
+    synonyms:
+    - 电流
+    - 三相电流
+    - A相电流
+    - B相电流
+    - C相电流
+    - 相电流
+    unit: A
+  ibph:
+    description: 三相电流值
+    name: 三相电流
+    synonyms:
+    - 三相电流值
+    - ABC相电流
+    unit: A
+  loadrate:
+    description: 设备负载率
+    name: 负载率
+    synonyms:
+    - 负载率
+    - 负荷率
+    - 负载情况
+    - 负荷
+    unit: '%'
+  p:
+    description: 设备实时有功功率
+    name: 有功功率
+    synonyms:
+    - 功率
+    - 有功功率
+    - 实时功率
+    - 瞬时功率
+    unit: kW
+  pv_i:
+    description: 光伏系统电流
+    name: 光伏电流
+    synonyms:
+    - 光伏电流
+    - 太阳能电流
+    - PV电流
+    unit: A
+  pv_u:
+    description: 光伏系统电压
+    name: 光伏电压
+    synonyms:
+    - 光伏电压
+    - 太阳能电压
+    - PV电压
+    unit: V
+  qf:
+    description: 功率因数
+    name: 功率因数
+    synonyms:
+    - 功率因数
+    - 功因
+    - PF
+    - cos
+    - 力率
+    - pf值
+    unit: ''
+  sd:
+    description: 环境湿度
+    name: 湿度
+    synonyms:
+    - 湿度
+    - 环境湿度
+    - 相对湿度
+    - 空气湿度
+    unit: '%'
+  soc:
+    description: 电池剩余容量
+    name: 荷电状态
+    synonyms:
+    - 电池容量
+    - 荷电状态
+    - SOC
+    - 剩余电量
+    - 电池电量
+    unit: '%'
+  t:
+    description: 环境温度
+    name: 温度
+    synonyms:
+    - 温度
+    - 温度值
+    - 环境温度
+    - 室温
+    - 气温
+    - 多少度
+    - 温湿度
+    unit: ℃
+  thd_i:
+    description: 电流总谐波畸变率
+    name: 电流谐波
+    synonyms:
+    - 电流谐波
+    - 谐波电流
+    - THD-I
+    - 电流畸变
+    unit: '%'
+  thd_v:
+    description: 电压总谐波畸变率
+    name: 电压谐波
+    synonyms:
+    - 电压谐波
+    - 谐波电压
+    - THD-V
+    - 电压畸变
+    unit: '%'
+  tzddc:
+    description: 调整电量
+    name: 调整电量
+    synonyms:
+    - 调整电量
+    unit: kWh
+  tzgdc:
+    description: 调整功率
+    name: 调整功率
+    synonyms:
+    - 调整功率
+    unit: kW
+  u_line:
+    description: 三相线电压
+    name: 线电压
+    synonyms:
+    - 线电压
+    - 三相电压
+    - 电压
+    - AB电压
+    - BC电压
+    - CA电压
+    - 三相线电压
+    - 电压稳不稳定
+    - 电压稳定
+    unit: V
+  u_phase:
+    description: 三相相电压
+    name: 相电压
+    synonyms:
+    - 相电压
+    - A相电压
+    - B相电压
+    - C相电压
+    - 单相电压
+    unit: V
+  ubph:
+    description: 三相电压值
+    name: 三相电压
+    synonyms:
+    - 三相电压值
+    - ABC相电压
+    unit: V
+mongodb:
+  collection_pattern: source_data_{tag}_{yyyymm}
+  database: bjdlzdh
+mysql:
+  device_database: device
+  device_table: device_info
+  project_database: project
+  project_table: project_info
+projects:
+  '1':
+    database: bjdlzdh
+    id: 49
+    name: 测试4
+  '111':
+    database: bjdlzdh
+    id: 51
+    name: 测试项目
+  '12':
+    database: bjdlzdh
+    id: 68
+    name: 测试0816
+  '123':
+    database: bjdlzdh
+    id: 70
+    name: 测试项目
+  '123456':
+    database: bjdlzdh
+    id: 15
+    name: 测试项目
+  asd:
+    database: bjdlzdh
+    id: 58
+    name: asd
+  bcwirerod:
+    database: bjdlzdh
+    id: 74
+    name: 线材生产管理系统
+  bjdlzdh:
+    database: bjdlzdh
+    id: 1
+    name: 智慧物联网能效平台
+  bpegsmartpark:
+    database: bjdlzdh
+    id: 59
+    name: 京电设备低碳智慧园区
+  bztz:
+    database: bjdlzdh
+    id: 92
+    name: 北自天正
+  bztzbs:
+    database: bjdlzdh
+    id: 94
+    name: 北自天正后台管理系统
+  carbon:
+    database: bjdlzdh
+    id: 83
+    name: 珠海市民服务中心
+  cbm:
+    database: bjdlzdh
+    id: 90
+    name: 变流箱运维管理系统
+  ceec:
+    database: bjdlzdh
+    id: 64
+    name: IT资产管理系统
+  ceecconstruction:
+    database: bjdlzdh
+    id: 6
+    name: 中能建智慧工地样板工程
+  ceeceric:
+    database: bjdlzdh
+    id: 80
+    name: 北京能源研究院机房系统
+  ceecsmartpark:
+    database: bjdlzdh
+    id: 10
+    name: 北自智慧园区
+  ceeec:
+    database: bjdlzdh
+    id: 3
+    name: 中国能建集团装备有限公司数字化展示平台
+  ceicdr:
+    database: bjdlzdh
+    id: 14
+    name: 风光发电智能辅控系统
+  ceis:
+    database: bjdlzdh
+    id: 5
+    name: 中国能源智慧系统
+  ceshi:
+    database: bjdlzdh
+    id: 16
+    name: 测试项目1-1
+  cpeccdr:
+    database: bjdlzdh
+    id: 53
+    name: 中电数据机房监控系统
+  csecc:
+    database: bjdlzdh
+    id: 85
+    name: 珠海国际会展中心
+  csptower:
+    database: bjdlzdh
+    id: 86
+    name: 聚光塔发电
+  datapicker:
+    database: bjdlzdh
+    id: 82
+    name: 数据中台
+  ezcc:
+    database: bjdlzdh
+    id: 98
+    name: 鄂州除尘项目
+  farm:
+    database: bjdlzdh
+    id: 105
+    name: 云尚农场
+  gallery:
+    database: bjdlzdh
+    id: 73
+    name: 智慧管廊
+  hdj:
+    database: bjdlzdh
+    id: 52
+    name: 低压线路三维拓扑智能生成系统
+  hive:
+    database: bjdlzdh
+    id: 88
+    name: AI知识库
+  hopsca:
+    database: bjdlzdh
+    id: 12
+    name: 中国能建上海总部低碳智慧园区
+  hxgs:
+    database: bjdlzdh
+    id: 104
+    name: 和襄高速
+  hydrogen:
+    database: bjdlzdh
+    id: 8
+    name: 可再生能源制氢系统
+  jfc:
+    database: bjdlzdh
+    id: 17
+    name: 北京设备智慧车间
+  lcb:
+    database: bjdlzdh
+    id: 18
+    name: 低碳建筑智慧能源管理平台
+  liquidsun:
+    database: bjdlzdh
+    id: 78
+    name: 光伏电解水平台
+  ljhpp:
+    database: bjdlzdh
+    id: 20
+    name: 龙江公司智慧水电厂系统
+  lubei:
+    database: bjdlzdh
+    id: 7
+    name: 藤县陆贝风电场智慧工程
+  ncpecm:
+    database: bjdlzdh
+    id: 84
+    name: 二十五项反措分析与评估系统
+  plyh:
+    database: bjdlzdh
+    id: 91
+    name: 平陆运河项目
+  pvbracket:
+    database: bjdlzdh
+    id: 72
+    name: 高倍聚光光伏支架控制系统
+  pvstation:
+    database: bjdlzdh
+    id: 75
+    name: 光伏场站演示项目
+  qiubei:
+    database: bjdlzdh
+    id: 13
+    name: 丘北风电场智慧系统
+  shm:
+    database: bjdlzdh
+    id: 50
+    name: 上海庙综合管理平台
+  tower:
+    database: bjdlzdh
+    id: 2
+    name: 输变电工程土建设施在线监测系统
+  txgs:
+    database: bjdlzdh
+    id: 106
+    name: 田西高速
+  upsm:
+    database: bjdlzdh
+    id: 89
+    name: ups运维管理系统
+  zhcc:
+    database: bjdlzdh
+    id: 76
+    name: 兰州修造除尘器演示项目
+  zhgs:
+    database: bjdlzdh
+    id: 63
+    name: 枣菏高速交能融合一体化智慧平台
+  znzx:
+    database: bjdlzdh
+    id: 62
+    name: 中能智新
+  项目代号:
+    database: bjdlzdh
+    id: 67
+    name: 测试项目1
+version: '1.0'

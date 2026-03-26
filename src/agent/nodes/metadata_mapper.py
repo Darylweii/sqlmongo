@@ -1,0 +1,634 @@
+"""
+Metadata Mapper Node - 元数据映射节点
+
+支持两种查询模式：
+1. 简单模式：使用固定 LIKE 查询（默认）
+2. 智能模式：使用 LLM 生成 SQL（需要 coder_llm）
+
+功能：
+- 查询设备代号列表
+- 保存设备中文名称到 device_names 字典
+- 处理查询结果为空的情况
+- 处理数据库连接失败的情况
+
+需求引用：
+- 需求 3.2: 使用纯 Python 代码查询 MySQL 数据库
+- 需求 3.4: 查询结果为空时设置 error 字段
+- 需求 3.5: 将设备中文名称保存到 Graph_State
+"""
+
+import logging
+from typing import Optional
+
+from langchain_core.language_models import BaseChatModel
+
+from src.agent.types import GraphState, NODE_METADATA_MAPPER
+from src.agent.query_entities import allows_explicit_multi_scope_aggregation
+from src.agent.query_plan_state import (
+    build_compat_intent_from_state,
+    get_comparison_targets_from_state,
+    get_project_hints_from_state,
+    get_primary_target_from_state,
+    has_device_listing_intent_from_state,
+    is_comparison_query,
+)
+from src.metadata.metadata_engine import MetadataEngine
+from src.exceptions import DatabaseConnectionError, MetadataEngineError
+
+
+logger = logging.getLogger(__name__)
+
+
+class MetadataMapperNode:
+    """
+    元数据映射节点 - 查询设备信息
+    
+    支持两种模式：
+    1. 简单模式（默认）：使用 MetadataEngine 的 LIKE 查询
+    2. 智能模式：使用 LLM 生成 SQL 查询（更灵活）
+    
+    核心职责：
+    1. 根据 intent 中的 target 查询匹配的设备
+    2. 返回设备代号列表 (device_codes)
+    3. 返回设备代号到中文名称的映射 (device_names)
+    
+    Attributes:
+        metadata_engine: MetadataEngine 实例，用于查询 MySQL 数据库
+        coder_llm: 代码模型 LLM 实例（可选，用于智能 SQL 生成）
+        use_llm_sql: 是否使用 LLM 生成 SQL
+    """
+    
+    def __init__(
+        self, 
+        metadata_engine: MetadataEngine,
+        coder_llm: Optional[BaseChatModel] = None,
+        use_llm_sql: bool = False
+    ):
+        """
+        初始化元数据映射节点
+        
+        Args:
+            metadata_engine: MetadataEngine 实例
+            coder_llm: 代码模型 LLM 实例（可选）
+            use_llm_sql: 是否使用 LLM 生成 SQL（默认 False）
+        """
+        self.metadata_engine = metadata_engine
+        self.coder_llm = coder_llm
+        self.use_llm_sql = use_llm_sql and coder_llm is not None
+        
+        # 如果启用 LLM SQL，初始化 SQL 生成器
+        self._sql_generator = None
+        if self.use_llm_sql:
+            from src.agent.nodes.sql_generator import SQLGeneratorNode
+            self._sql_generator = SQLGeneratorNode(coder_llm)
+            logger.info("MetadataMapper: 启用 LLM SQL 生成模式")
+    
+    def _normalize_scope_text(self, value: object) -> str:
+        return "".join(str(value or "").strip().lower().split())
+
+    def _get_alias_memory_row(self, state: GraphState, target: str) -> dict | None:
+        alias_memory = state.get("alias_memory") if isinstance(state.get("alias_memory"), dict) else {}
+        normalized_target = self._normalize_scope_text(target)
+        if not normalized_target:
+            return None
+        entry = alias_memory.get(normalized_target)
+        if not isinstance(entry, dict):
+            return None
+        device_code = str(entry.get("device") or "").strip()
+        if not device_code:
+            return None
+        return {
+            "device": device_code,
+            "name": entry.get("name"),
+            "device_type": entry.get("device_type", ""),
+            "project_id": entry.get("project_id", ""),
+            "project_name": entry.get("project_name"),
+            "project_code_name": entry.get("project_code_name"),
+            "tg": entry.get("tg"),
+        }
+
+    def _device_to_row(self, device) -> dict:
+        if hasattr(device, "to_dict"):
+            return device.to_dict()
+        return {
+            "device": getattr(device, "device", ""),
+            "name": getattr(device, "name", ""),
+            "device_type": getattr(device, "device_type", ""),
+            "project_id": getattr(device, "project_id", ""),
+            "project_name": getattr(device, "project_name", None),
+            "project_code_name": getattr(device, "project_code_name", None),
+            "tg": getattr(device, "tg", None),
+        }
+
+    def _is_explicit_device_code(self, value: str) -> bool:
+        import re
+        return bool(re.fullmatch(r"[a-zA-Z]\d*_[a-zA-Z0-9_]+", str(value or "").strip()))
+
+    def _project_hint_score(self, row: dict, hint: str) -> int:
+        normalized_hint = self._normalize_scope_text(hint)
+        if not normalized_hint:
+            return 0
+        project_name = self._normalize_scope_text(row.get("project_name"))
+        project_code_name = self._normalize_scope_text(row.get("project_code_name"))
+        if normalized_hint == project_name:
+            return 100
+        if normalized_hint == project_code_name:
+            return 95
+        if normalized_hint and normalized_hint in project_name:
+            return 80
+        if normalized_hint and normalized_hint in project_code_name:
+            return 75
+        return 0
+
+    def _select_clarification_candidates(self, rows: list[dict], limit: int = 10) -> list[dict]:
+        result = []
+        seen = set()
+        for row in rows:
+            candidate = {
+                "device": row.get("device"),
+                "name": row.get("name"),
+                "project_id": row.get("project_id"),
+                "project_name": row.get("project_name"),
+                "project_code_name": row.get("project_code_name"),
+                "tg": row.get("tg"),
+                "match_type": row.get("match_type"),
+                "match_score": row.get("match_score"),
+                "match_reason": row.get("match_reason"),
+                "matched_fields": row.get("matched_fields"),
+                "scope_mode": row.get("scope_mode"),
+            }
+            dedupe_key = (candidate["device"], candidate["project_id"], candidate["tg"], candidate["name"])
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            result.append(candidate)
+            if len(result) >= limit:
+                break
+        return result
+
+    def _build_aggregate_scope_candidate(self, keyword: str, candidates: list[dict]) -> dict | None:
+        if not candidates:
+            return None
+        device_codes = {str(item.get("device") or "").strip() for item in candidates if str(item.get("device") or "").strip()}
+        if len(device_codes) != 1:
+            return None
+        device_code = next(iter(device_codes))
+        scopes = {
+            (
+                str(item.get("project_id") or ""),
+                str(item.get("project_name") or item.get("project_code_name") or ""),
+                str(item.get("tg") or ""),
+            )
+            for item in candidates
+        }
+        if len(scopes) <= 1:
+            return None
+        return {
+            "device": device_code,
+            "name": f"\u6240\u6709 {device_code} \u8bbe\u5907",
+            "project_id": "__aggregate_all__",
+            "project_name": "\u8de8\u9879\u76ee\u6c47\u603b",
+            "project_code_name": None,
+            "tg": None,
+            "match_type": "aggregate_all_option",
+            "match_score": None,
+            "match_reason": "\u6c47\u603b\u8be5\u8bbe\u5907\u5728\u6240\u6709\u5339\u914d\u9879\u76ee\u4e0b\u7684\u6570\u636e",
+            "matched_fields": ["aggregate_scope"],
+            "scope_mode": "aggregate_all",
+        }
+
+
+    def _build_clarification_message(self, groups: list[dict], resolved_rows: list[dict]) -> str:
+        lines: list[str] = []
+        for row in resolved_rows:
+            device = str(row.get("device") or "").strip()
+            name = str(row.get("name") or "").strip()
+            project_name = str(row.get("project_name") or "").strip()
+            if device and name and project_name:
+                lines.append(f"已确认：{device} -> {device}（{name}，项目：{project_name}）")
+            elif device and name:
+                lines.append(f"已确认：{device} -> {device}（{name}）")
+
+        for group in groups:
+            keyword = str(group.get("keyword") or "").strip()
+            candidates = list(group.get("candidates") or [])
+            preview = "、".join(
+                f"{item.get('device')}（{item.get('name') or item.get('project_name') or '未命名设备'}）"
+                for item in candidates[:3]
+            )
+            if keyword:
+                lines.append(f"“{keyword}”匹配到多个候选设备：{preview}。请确认你指的是哪一个。")
+
+        return "\n".join(line for line in lines if line).strip() or "匹配到多个候选设备，请先确认。"
+
+    def _resolve_exact_code_candidates(self, device_code: str, rows: list[dict], project_hints: list[str]) -> tuple[list[dict], dict | None]:
+        normalized_code = self._normalize_scope_text(device_code)
+        exact_rows = [row for row in rows if self._normalize_scope_text(row.get("device")) == normalized_code]
+        if not exact_rows:
+            return rows, None
+
+        scopes = {
+            (
+                str(row.get("project_id") or ""),
+                str(row.get("project_name") or ""),
+                str(row.get("project_code_name") or ""),
+                str(row.get("tg") or ""),
+            )
+            for row in exact_rows
+        }
+        if len(exact_rows) <= 1 or len(scopes) <= 1:
+            return exact_rows[:1], None
+
+        if project_hints:
+            scored = []
+            for row in exact_rows:
+                best_score = max((self._project_hint_score(row, hint) for hint in project_hints), default=0)
+                if best_score > 0:
+                    scored.append((best_score, row))
+            if scored:
+                scored.sort(key=lambda item: item[0], reverse=True)
+                top_score = scored[0][0]
+                top_rows = [row for score, row in scored if score == top_score]
+                top_scopes = {
+                    (
+                        str(row.get("project_id") or ""),
+                        str(row.get("project_name") or ""),
+                        str(row.get("project_code_name") or ""),
+                        str(row.get("tg") or ""),
+                    )
+                    for row in top_rows
+                }
+                if len(top_rows) == 1 or len(top_scopes) == 1:
+                    return [top_rows[0]], None
+
+        clarification_rows = [
+            {
+                **row,
+                "match_type": "exact_code_conflict",
+                "match_score": None,
+                "match_reason": "\u7cbe\u786e\u7801\u547d\u4e2d",
+            }
+            for row in exact_rows
+        ]
+        clarification_candidates = self._select_clarification_candidates(clarification_rows)
+        aggregate_candidate = self._build_aggregate_scope_candidate(device_code, clarification_candidates)
+        if aggregate_candidate:
+            clarification_candidates.append(aggregate_candidate)
+        return [], {"keyword": device_code, "candidates": clarification_candidates}
+
+    def _find_project_match(self, project_hints: list[str]) -> dict | None:
+        if not self.metadata_engine or not project_hints:
+            return None
+        try:
+            projects = self.metadata_engine.list_projects()
+        except Exception:
+            return None
+        best_project = None
+        best_score = 0
+        for hint in project_hints:
+            normalized_hint = self._normalize_scope_text(hint)
+            if not normalized_hint:
+                continue
+            for project in projects or []:
+                project_name = self._normalize_scope_text(project.get("project_name"))
+                project_code_name = self._normalize_scope_text(project.get("project_code_name"))
+                score = 0
+                if normalized_hint == project_name or normalized_hint == project_code_name:
+                    score = 100
+                elif normalized_hint and (normalized_hint in project_name or normalized_hint in project_code_name):
+                    score = 80
+                if score > best_score:
+                    best_score = score
+                    best_project = project
+        return best_project if best_score > 0 else None
+
+
+    def _get_project_devices(self, project_hints: list[str]) -> tuple[list[dict], str]:
+        project = self._find_project_match(project_hints)
+        if not project:
+            return [], ""
+        devices = self.metadata_engine.get_devices_by_project(str(project.get("id") or ""))
+        rows = [self._device_to_row(d) for d in devices]
+        return rows, f"project_devices:{project.get('project_name') or project.get('project_code_name') or project.get('id')}"
+
+
+    def _narrow_rows_by_project_hints(self, rows: list[dict], project_hints: list[str]) -> list[dict]:
+        if len(rows) <= 1 or not project_hints:
+            return rows
+        scored = []
+        for row in rows:
+            best_score = max((self._project_hint_score(row, hint) for hint in project_hints), default=0)
+            if best_score > 0:
+                scored.append((best_score, row))
+        if not scored:
+            return rows
+        scored.sort(key=lambda item: item[0], reverse=True)
+        top_score = scored[0][0]
+        top_rows = [row for score, row in scored if score == top_score]
+        return top_rows or rows
+
+    def __call__(self, state: GraphState) -> GraphState:
+        """
+        执行设备元数据映射。
+
+        优先从 query_plan 派生出的兼容 intent 中读取目标；当查询本身是“设备列表查询”时，
+        直接返回设备候选表格，避免继续误走到时序数据查询链路。
+        """
+        history = list(state.get("history", []))
+        intent = build_compat_intent_from_state(state)
+        comparison_targets = get_comparison_targets_from_state(state)
+        is_comparison = is_comparison_query(state) and len(comparison_targets) > 1
+        target = get_primary_target_from_state(state) or str(intent.get("target") or "").strip()
+
+        if is_comparison:
+            return self._handle_comparison_query(state, comparison_targets, history)
+
+        if not target:
+            return {
+                **state,
+                "error": "缺少查询目标，无法解析设备范围。",
+                "error_node": NODE_METADATA_MAPPER,
+                "history": history + [{
+                    "node": NODE_METADATA_MAPPER,
+                    "result": "错误: 缺少查询目标"
+                }]
+            }
+
+        intent.setdefault("target", target)
+        project_hints = get_project_hints_from_state(state)
+
+        try:
+            alias_row = self._get_alias_memory_row(state, target)
+            if alias_row:
+                sql = "session_alias"
+                device_rows = [alias_row]
+            elif self.use_llm_sql and self._sql_generator:
+                devices, sql = self._query_with_llm_sql(intent)
+                device_rows = [self._device_to_row(d) for d in devices]
+            else:
+                devices, sql = self.metadata_engine.search_devices(target)
+                device_rows = [self._device_to_row(d) for d in devices]
+                if not device_rows and has_device_listing_intent_from_state(state) and project_hints:
+                    device_rows, sql = self._get_project_devices(project_hints)
+
+            if not device_rows:
+                return {
+                    **state,
+                    "error": f"?????{target}??????",
+                    "error_node": NODE_METADATA_MAPPER,
+                    "history": history + [{
+                        "node": NODE_METADATA_MAPPER,
+                        "result": f"????????{target}??????",
+                    }]
+                }
+
+            if self._is_explicit_device_code(target):
+                resolved_rows, clarification = self._resolve_exact_code_candidates(target, device_rows, project_hints)
+                if clarification:
+                    return {
+                        **state,
+                        "intent": intent,
+                        "clarification_required": True,
+                        "clarification_candidates": [clarification],
+                        "final_response": self._build_clarification_message([clarification], []),
+                        "show_table": False,
+                        "table_type": None,
+                        "history": history + [{
+                            "node": NODE_METADATA_MAPPER,
+                            "result": f"找到 {len(clarification.get('candidates') or [])} 个候选设备，等待用户确认",
+                        }],
+                    }
+                device_rows = resolved_rows
+            else:
+                device_rows = self._narrow_rows_by_project_hints(device_rows, project_hints)
+
+            if not has_device_listing_intent_from_state(state) and len(device_rows) > 1:
+                clarification = {"keyword": target, "candidates": self._select_clarification_candidates(device_rows)}
+                return {
+                    **state,
+                    "intent": intent,
+                    "clarification_required": True,
+                    "clarification_candidates": [clarification],
+                    "final_response": self._build_clarification_message([clarification], []),
+                    "show_table": False,
+                    "table_type": None,
+                    "history": history + [{
+                        "node": NODE_METADATA_MAPPER,
+                        "result": f"找到 {len(clarification.get('candidates') or [])} 个候选设备，等待用户确认",
+                    }],
+                }
+
+            device_codes = [row.get("device") for row in device_rows if row.get("device")]
+            device_names = {row.get("device"): row.get("name") for row in device_rows if row.get("device")}
+            tg_values = [str(row.get("tg")).strip() for row in device_rows if row.get("tg")]
+
+            mode = "LLM SQL" if self.use_llm_sql else "LIKE"
+            logger.info("设备映射完成 [%s]: target='%s', 命中 %s 个设备", mode, target, len(device_codes))
+
+            if has_device_listing_intent_from_state(state):
+                response = f"已找到 {len(device_rows)} 个相关设备，请查看下表。"
+                return {
+                    **state,
+                    "intent": intent,
+                    "device_codes": device_codes,
+                    "device_names": device_names,
+                    "tg_values": tg_values,
+                    "devices": device_rows,
+                    "final_response": response,
+                    "show_table": True,
+                    "table_type": "devices",
+                    "query_info": {
+                        "devices": device_rows,
+                        "target": target,
+                        "sql": sql,
+                    },
+                    "history": history + [{
+                        "node": NODE_METADATA_MAPPER,
+                        "result": f"找到 {len(device_codes)} 个设备候选"
+                    }]
+                }
+
+            return {
+                **state,
+                "intent": intent,
+                "device_codes": device_codes,
+                "device_names": device_names,
+                "tg_values": tg_values,
+                "history": history + [{
+                    "node": NODE_METADATA_MAPPER,
+                    "result": f"解析出 {len(device_codes)} 个设备"
+                }]
+            }
+
+        except DatabaseConnectionError as e:
+            logger.error("设备映射数据库连接失败: %s", e)
+            return {
+                **state,
+                "error": f"设备映射数据库连接失败: {str(e)}",
+                "error_node": NODE_METADATA_MAPPER,
+                "history": history + [{
+                    "node": NODE_METADATA_MAPPER,
+                    "result": "错误: 数据库连接失败"
+                }]
+            }
+
+        except MetadataEngineError as e:
+            logger.error("设备映射元数据查询失败: %s", e)
+            return {
+                **state,
+                "error": f"设备映射元数据查询失败: {str(e)}",
+                "error_node": NODE_METADATA_MAPPER,
+                "history": history + [{
+                    "node": NODE_METADATA_MAPPER,
+                    "result": f"错误: {str(e)}"
+                }]
+            }
+
+        except Exception as e:
+            logger.exception("设备映射执行异常: %s", e)
+            return {
+                **state,
+                "error": f"设备映射执行异常: {str(e)}",
+                "error_node": NODE_METADATA_MAPPER,
+                "history": history + [{
+                    "node": NODE_METADATA_MAPPER,
+                    "result": f"错误: {str(e)}"
+                }]
+            }
+
+    def _handle_comparison_query(self, state: GraphState, targets: list[str], history: list) -> GraphState:
+        all_device_codes = []
+        all_device_names = {}
+        all_tg_values = []
+        comparison_device_groups = {}
+        comparison_scope_groups = {}
+        resolved_rows = []
+        clarification_groups = []
+        project_hints = get_project_hints_from_state(state)
+
+        query_text = str(getattr(state.get("query_plan"), "current_question", None) or state.get("query") or "")
+        for target in targets:
+            alias_row = self._get_alias_memory_row(state, target)
+            if alias_row:
+                device_rows = [alias_row]
+            else:
+                devices, _ = self.metadata_engine.search_devices(target)
+                if not devices:
+                    continue
+                device_rows = [self._device_to_row(device) for device in devices]
+            if self._is_explicit_device_code(target):
+                allow_multi_scope_aggregation = allows_explicit_multi_scope_aggregation(query_text, target)
+                narrowed_rows, clarification = self._resolve_exact_code_candidates(target, device_rows, project_hints)
+                if clarification and not allow_multi_scope_aggregation:
+                    clarification_groups.append(clarification)
+                    continue
+                device_rows = device_rows if (clarification and allow_multi_scope_aggregation) else narrowed_rows
+            else:
+                device_rows = self._narrow_rows_by_project_hints(device_rows, project_hints)
+                if len(device_rows) > 1:
+                    clarification_groups.append(
+                        {
+                            "keyword": target,
+                            "candidates": self._select_clarification_candidates(device_rows),
+                        }
+                    )
+                    continue
+
+            device_codes = [row.get("device") for row in device_rows if row.get("device")]
+            comparison_device_groups[target] = device_codes
+            comparison_scope_groups[target] = [dict(row) for row in device_rows if isinstance(row, dict)]
+            all_device_codes.extend(device_codes)
+            resolved_rows.extend(device_rows)
+            for row in device_rows:
+                if row.get("device"):
+                    all_device_names[row.get("device")] = row.get("name")
+                if row.get("tg"):
+                    all_tg_values.append(str(row.get("tg")).strip())
+
+        if clarification_groups:
+            return {
+                **state,
+                "clarification_required": True,
+                "clarification_candidates": clarification_groups,
+                "device_codes": list(dict.fromkeys(all_device_codes)),
+                "device_names": all_device_names,
+                "tg_values": list(dict.fromkeys(all_tg_values)),
+                "resolved_devices": resolved_rows,
+                "final_response": self._build_clarification_message(clarification_groups, resolved_rows),
+                "show_table": False,
+                "table_type": None,
+                "history": history + [{
+                    "node": NODE_METADATA_MAPPER,
+                    "result": f"找到 {sum(len(group.get('candidates') or []) for group in clarification_groups)} 个候选设备，等待用户确认",
+                }],
+            }
+
+        if not all_device_codes:
+            return {
+                **state,
+                "error": f"未找到与这些目标匹配的设备: {targets}",
+                "error_node": NODE_METADATA_MAPPER,
+                "history": history + [{
+                    "node": NODE_METADATA_MAPPER,
+                    "result": "错误: 未找到匹配设备"
+                }]
+            }
+
+        all_device_codes = list(dict.fromkeys(all_device_codes))
+        return {
+            **state,
+            "intent": build_compat_intent_from_state({**state, "comparison_targets": targets, "is_comparison": True}),
+            "device_codes": all_device_codes,
+            "device_names": all_device_names,
+            "tg_values": all_tg_values,
+            "is_comparison": True,
+            "comparison_targets": list(targets),
+            "comparison_device_groups": comparison_device_groups,
+            "comparison_scope_groups": comparison_scope_groups,
+            "history": history + [{
+                "node": NODE_METADATA_MAPPER,
+                "result": f"对比解析: {len(targets)} 个目标，共 {len(all_device_codes)} 个设备"
+            }]
+        }
+
+    def _query_with_llm_sql(self, intent: dict) -> tuple:
+        """
+        使用 LLM 生成的 SQL 查询设备
+        
+        Args:
+            intent: 用户意图
+        
+        Returns:
+            (devices, sql) - 设备列表和 SQL 语句
+        """
+        from src.metadata.metadata_engine import DeviceInfo
+        
+        # 生成 SQL
+        sql, error = self._sql_generator.generate_sql(intent)
+        if error:
+            raise MetadataEngineError(error)
+        
+        # 执行 SQL
+        session = self.metadata_engine._get_session()
+        try:
+            from sqlalchemy import text
+            result = session.execute(text(sql))
+            
+            devices = []
+            for row in result:
+                if not row.device:
+                    continue
+                device = DeviceInfo(
+                    device=row.device,
+                    name=row.device_name or "",
+                    device_type=row.device_type or "",
+                    project_id=str(row.project_id) if row.project_id else "",
+                    project_name=row.project_name if hasattr(row, 'project_name') else None,
+                    project_code_name=row.project_code_name if hasattr(row, 'project_code_name') else None
+                )
+                devices.append(device)
+            
+            return devices, sql
+            
+        finally:
+            session.close()

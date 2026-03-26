@@ -1,0 +1,2467 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 数据查询助手</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    <style>
+        .chat-container { height: calc(100vh - 300px); min-height: 400px; }
+        .message-user { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .message-ai { background: #f3f4f6; }
+        .execution-panel {
+            margin-top: 0.75rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.9rem;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.82);
+        }
+        .execution-panel summary {
+            list-style: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.75rem 0.9rem;
+        }
+        .execution-panel summary::-webkit-details-marker { display: none; }
+        .execution-panel[open] summary { background: #eef2ff; }
+        .execution-summary-left {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            min-width: 0;
+        }
+        .execution-summary-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #111827;
+        }
+        .execution-summary-meta {
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .execution-summary-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.28rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 9999px;
+            background: #f3f4f6;
+            font-size: 0.75rem;
+            color: #4b5563;
+            border: 1px solid #e5e7eb;
+            line-height: 1.2;
+        }
+        .execution-summary-badge.primary {
+            background: #eef2ff;
+            color: #4338ca;
+            border-color: #c7d2fe;
+            font-weight: 600;
+        }
+        .execution-chevron {
+            font-size: 0.8rem;
+            color: #6b7280;
+            transition: transform 0.2s ease;
+        }
+        .execution-panel[open] .execution-chevron { transform: rotate(90deg); }
+        .execution-steps-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+            padding: 0 0.9rem 0.9rem;
+        }
+        .execution-step-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 0.85rem;
+            background: #f9fafb;
+            padding: 0.7rem 0.8rem;
+        }
+        .execution-step-card.running {
+            background: #fffbeb;
+            border-color: #fcd34d;
+        }
+        .execution-step-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 0.75rem;
+        }
+        .execution-step-main {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            min-width: 0;
+        }
+        .execution-step-icon {
+            font-size: 0.95rem;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+        .execution-step-title {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #111827;
+            word-break: break-word;
+        }
+        .execution-step-meta {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            flex-shrink: 0;
+            font-variant-numeric: tabular-nums;
+        }
+        .execution-step-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.18rem 0.48rem;
+            border-radius: 9999px;
+            border: 1px solid #e5e7eb;
+            background: #ffffff;
+            color: #6b7280;
+            font-size: 0.72rem;
+            line-height: 1.2;
+        }
+        .execution-step-badge.strong {
+            background: #eef2ff;
+            border-color: #c7d2fe;
+            color: #4338ca;
+            font-weight: 600;
+        }
+        .execution-step-info {
+            margin-top: 0.38rem;
+            padding-left: 1.5rem;
+            font-size: 0.75rem;
+            color: #6b7280;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .execution-live-dot {
+            width: 0.5rem;
+            height: 0.5rem;
+            border-radius: 9999px;
+            background: #f59e0b;
+            display: inline-block;
+            animation: pulse 1.2s infinite;
+            flex-shrink: 0;
+        }
+        .step-item { transition: all 0.3s ease; }
+        .step-running { animation: pulse 1.5s infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .table-container { max-height: 500px; overflow-y: auto; }
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        .insight-inline-panel { background: rgba(255, 255, 255, 0.88); }
+        .insight-inline-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; }
+        .inline-chart-list { display: grid; grid-template-columns: 1fr; gap: 0.75rem; }
+        .inline-chart-stage {
+            width: 100%;
+            min-width: 0;
+            min-height: 280px;
+            height: 360px;
+            resize: vertical;
+            overflow: hidden;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.75rem;
+            background: #ffffff;
+            box-sizing: border-box;
+        }
+        .inline-chart-stage.expanded {
+            height: 560px;
+        }
+        .inline-chart-canvas {
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            height: 100%;
+            min-height: 260px;
+            box-sizing: border-box;
+        }
+        .chart-modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.62);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+            padding: 1.5rem;
+        }
+        .chart-modal-backdrop.show {
+            display: flex;
+        }
+        .chart-modal-panel {
+            width: min(96vw, 1280px);
+            height: min(90vh, 860px);
+            background: #ffffff;
+            border-radius: 1rem;
+            box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .chart-modal-canvas {
+            flex: 1;
+            min-height: 0;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-6">
+        <!-- 标题 -->
+        <div class="text-center mb-6">
+            <h1 class="text-3xl font-bold text-gray-800">🤖 AI 数据查询助手</h1>
+            <p class="text-gray-600 mt-2">智能查询设备数据，支持自然语言交互</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- 左侧：AI 对话 -->
+            <div class="lg:col-span-2">
+                <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+                    <!-- 对话区域 -->
+                    <div class="chat-container overflow-y-auto p-4 space-y-4" id="chatContainer">
+                        <!-- 欢迎消息 -->
+                        <div class="flex items-start space-x-3">
+                            <div class="w-10 h-10 rounded-full bg-gradient-to-r from-green-400 to-blue-500 flex items-center justify-center text-white font-bold">AI</div>
+                            <div class="message-ai rounded-2xl rounded-tl-none px-4 py-3 max-w-xl">
+                                <p class="text-gray-800">你好！我是 AI 数据查询助手，可以帮你查询设备信息和传感器数据。</p>
+                                <p class="text-gray-600 text-sm mt-2">试试这些问题：</p>
+                                <ul class="text-gray-600 text-sm mt-1 space-y-1">
+                                    <li>• 查询 a1_b9 设备今天的电流数据</li>
+                                    <li>• 有哪些项目可用？</li>
+                                    <li>• 搜索包含 b9 的设备</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 输入区域 -->
+                    <div class="border-t p-4">
+                        <div class="flex space-x-3">
+                            <input type="text" id="chatInput" 
+                                class="flex-1 border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                placeholder="输入你的问题..." 
+                                onkeypress="if(event.key==='Enter') sendMessage()">
+                            <button onclick="sendMessage()" 
+                                class="bg-gradient-to-r from-purple-500 to-indigo-600 text-white px-6 py-3 rounded-xl hover:opacity-90 transition flex items-center space-x-2">
+                                <span>发送</span>
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 数据表格（仅用于快捷查询） -->
+                <div class="bg-white rounded-xl shadow-lg mt-6 overflow-hidden" id="tableSection" style="display: none;">
+                    <div class="p-4 border-b flex justify-between items-center">
+                        <h3 class="text-lg font-semibold text-gray-800">📊 快捷查询结果</h3>
+                        <div class="flex items-center space-x-4">
+                            <span class="text-sm text-gray-600" id="tableInfo"></span>
+                            <button onclick="exportData()" class="text-sm text-purple-600 hover:text-purple-800">导出数据</button>
+                        </div>
+                    </div>
+                    
+                    <!-- 统计信息 -->
+                    <div class="px-4 py-3 bg-gray-50 border-b" id="statsSection" style="display: none;">
+                        <div class="flex space-x-6 text-sm">
+                            <span class="text-gray-600">最小值: <span class="font-semibold text-gray-800" id="statMin">-</span></span>
+                            <span class="text-gray-600">最大值: <span class="font-semibold text-gray-800" id="statMax">-</span></span>
+                            <span class="text-gray-600">平均值: <span class="font-semibold text-gray-800" id="statAvg">-</span></span>
+                        </div>
+                    </div>
+
+                    <!-- 表格 -->
+                    <div class="table-container">
+                        <table class="w-full">
+                            <thead class="bg-gray-50 sticky top-0" id="quickTableHead">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">时间</th>
+                                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">设备</th>
+                                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">标签</th>
+                                    <th class="px-4 py-3 text-right text-sm font-semibold text-gray-600">数值</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tableBody" class="divide-y divide-gray-200">
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- 分页 -->
+                    <div class="p-4 border-t flex justify-between items-center" id="paginationSection">
+                        <div class="text-sm text-gray-600">
+                            第 <span id="currentPage">1</span> / <span id="totalPages">1</span> 页，
+                            共 <span id="totalCount">0</span> 条记录
+                        </div>
+                        <div class="flex space-x-2">
+                            <button onclick="prevPage()" id="prevBtn" 
+                                class="px-4 py-2 border rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+                                上一页
+                            </button>
+                            <button onclick="nextPage()" id="nextBtn"
+                                class="px-4 py-2 border rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
+                                下一页
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧：快捷查询 -->
+            <div class="space-y-6">
+                <!-- 快捷查询面板 -->
+                <div class="bg-white rounded-xl shadow-lg p-4">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">⚡ 快捷查询</h3>
+                    
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">设备代号</label>
+                            <input type="text" id="deviceCode" value="a1_b9"
+                                class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">数据类型</label>
+                            <select id="dataType" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                                <option value="ep">电量 (ep)</option>
+                                <option value="i">电流 (i)</option>
+                                <option value="u_line">电压 (u_line)</option>
+                                <option value="p">功率 (p)</option>
+                                <option value="qf">功率因数 (qf)</option>
+                                <option value="t">温度 (t)</option>
+                                <option value="thd_i">电流谐波 (thd_i)</option>
+                                <option value="thd_v">电压谐波 (thd_v)</option>
+                                <option value="soc">电池容量 (soc)</option>
+                            </select>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">开始日期</label>
+                                <input type="date" id="startDate" 
+                                    class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">结束日期</label>
+                                <input type="date" id="endDate"
+                                    class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">每页条数</label>
+                            <select id="pageSize" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
+                                <option value="20">20 条</option>
+                                <option value="50" selected>50 条</option>
+                                <option value="100">100 条</option>
+                                <option value="200">200 条</option>
+                            </select>
+                        </div>
+                        
+                        <button onclick="quickQuery()" 
+                            class="w-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white py-3 rounded-lg hover:opacity-90 transition font-medium">
+                            🔍 查询数据
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 执行步骤 -->
+
+                <div class="bg-white rounded-xl shadow-lg p-4" id="stepsSection" style="display: none;">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">📋 执行步骤</h3>
+                    <div id="stepsList" class="space-y-2">
+                    </div>
+                </div>
+
+                <!-- 快捷问题 -->
+                <div class="bg-white rounded-xl shadow-lg p-4">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-4">💡 常用问题</h3>
+                    <div class="space-y-2">
+                        <button onclick="askQuestion('有哪些项目可用？')" 
+                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-50 text-gray-700 text-sm transition">
+                            有哪些项目可用？
+                        </button>
+                        <button onclick="askQuestion('搜索包含 b9 的设备')" 
+                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-50 text-gray-700 text-sm transition">
+                            搜索包含 b9 的设备
+                        </button>
+                        <button onclick="askQuestion('查询 a1_b9 设备今天的电流数据')" 
+                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-50 text-gray-700 text-sm transition">
+                            查询 a1_b9 今天的电流数据
+                        </button>
+                        <button onclick="askQuestion('查询 a1_b9 设备今天的电压数据')" 
+                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-50 text-gray-700 text-sm transition">
+                            查询 a1_b9 今天的电压数据
+                        </button>
+                        <button onclick="askQuestion('查询 a1_b9 设备 2024年1月的电量数据，每页50条')" 
+                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-50 text-gray-700 text-sm transition">
+                            查询 a1_b9 2024年1月电量数据
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="chartModal" class="chart-modal-backdrop" onclick="closeChartModal(event)">
+        <div class="chart-modal-panel" onclick="event.stopPropagation()">
+            <div class="px-5 py-4 border-b flex items-center justify-between gap-3">
+                <div>
+                    <div class="text-lg font-semibold text-gray-800" id="chartModalTitle">全屏查看</div>
+                    <div class="text-xs text-gray-500">图表支持拖拽、缩放，适合放大后查看细节。</div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="closeChartModal()" class="px-3 py-2 text-sm border rounded-lg hover:bg-gray-50">关闭</button>
+                </div>
+            </div>
+            <div class="p-4 flex-1 min-h-0">
+                <div id="chartModalCanvas" class="chart-modal-canvas"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // API 配置 - 前后端分离时修改此地址
+        const API_BASE = 'http://localhost:8080';  // 后端 API 地址
+        
+        // 全局状态
+        const CHAT_SESSION_STORAGE_KEY = 'sqlmongo2_chat_session_id';
+        const EXECUTION_PANEL_STORAGE_KEY = 'sqlmongo2_execution_panel_open';
+        let chatSessionId = null;
+        let currentQueryParams = null;
+        let currentPage = 1;
+        let tableData = [];
+        let chatHistory = [];  // 对话历史
+        let isLoadingTable = false;  // 防止重复请求
+        let inlineChartInstances = new Map();
+        let inlineChartSpecs = new Map();
+        let inlineChartResizeObservers = new Map();
+        let inlineChartResizeFrames = new Map();
+        let inlineChartResizeStates = new Map();
+        let fullscreenChart = null;
+        let fullscreenChartMeta = null;
+        let lastInsightPayload = null;
+        let executionStepTimers = new Map();
+
+        // 初始化日期
+        function generateChatSessionId() {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                return window.crypto.randomUUID();
+            }
+            return `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        }
+
+        function rememberChatSessionId(sessionId) {
+            if (!sessionId) return chatSessionId;
+            chatSessionId = sessionId;
+            try {
+                window.sessionStorage.setItem(CHAT_SESSION_STORAGE_KEY, sessionId);
+            } catch (error) {
+                console.warn('persist session id failed', error);
+            }
+            return chatSessionId;
+        }
+
+        function getChatSessionId() {
+            if (chatSessionId) return chatSessionId;
+            try {
+                const stored = window.sessionStorage.getItem(CHAT_SESSION_STORAGE_KEY);
+                if (stored) {
+                    chatSessionId = stored;
+                    return chatSessionId;
+                }
+            } catch (error) {
+                console.warn('read session id failed', error);
+            }
+            return rememberChatSessionId(generateChatSessionId());
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('startDate').value = today;
+            document.getElementById('endDate').value = today;
+        });
+
+        // 发送消息 - 使用流式输出
+        function hasExplicitChartIntent(text) {
+            const normalized = (text || '').toLowerCase().trim();
+            if (!normalized) return false;
+            const keywords = [
+                '\u56fe', '\u56fe\u8868', '\u753b\u56fe', '\u753b\u51fa\u6765', '\u53ef\u89c6\u5316', '\u6298\u7ebf', '\u67f1\u72b6',
+                '\u96f7\u8fbe', '\u7bb1\u7ebf', '\u70ed\u529b', '\u66f2\u7ebf', '\u8d8b\u52bf\u56fe', '\u5bf9\u6bd4\u56fe',
+                'chart', 'plot', 'echart', 'echarts', 'matplotlib'
+            ];
+            return keywords.some(keyword => normalized.includes(keyword));
+        }
+
+        function rememberInsightPayload(payload) {
+            if (!payload) return;
+            const hasAnalysis = !!payload.analysis;
+            const hasCharts = Array.isArray(payload.chart_specs) && payload.chart_specs.length > 0;
+            const hasQueryParams = !!payload.query_params;
+            if (!hasAnalysis && !hasCharts && !hasQueryParams) return;
+            lastInsightPayload = {
+                ...(lastInsightPayload || {}),
+                ...payload,
+                chart_specs: Array.isArray(payload.chart_specs) ? payload.chart_specs : ((lastInsightPayload && lastInsightPayload.chart_specs) || []),
+                analysis: payload.analysis || (lastInsightPayload && lastInsightPayload.analysis) || null,
+                query_params: payload.query_params || (lastInsightPayload && lastInsightPayload.query_params) || null
+            };
+        }
+
+        function selectChartSpecsForMessage(message, chartSpecs) {
+            const normalized = (message || '').toLowerCase();
+            if (!Array.isArray(chartSpecs)) return [];
+            const byId = keyword => chartSpecs.filter(spec => (spec.id || '').toLowerCase().includes(keyword));
+            if (normalized.includes('\u96f7\u8fbe')) return byId('radar');
+            if (normalized.includes('\u7bb1\u7ebf')) return byId('box');
+            if (normalized.includes('\u67f1\u72b6')) return byId('bar');
+            if (normalized.includes('\u6298\u7ebf') || normalized.includes('matplotlib') || normalized.includes('plot') || normalized.includes('\u8d8b\u52bf')) {
+                const lineCharts = byId('line');
+                return lineCharts.length ? lineCharts : chartSpecs;
+            }
+            return chartSpecs;
+        }
+
+        function tryHandleChartFollowUp(message) {
+            if (!hasExplicitChartIntent(message)) return false;
+            if (!lastInsightPayload || !Array.isArray(lastInsightPayload.chart_specs) || lastInsightPayload.chart_specs.length === 0) {
+                return false;
+            }
+
+            const selectedCharts = selectChartSpecsForMessage(message, lastInsightPayload.chart_specs);
+            if (!selectedCharts.length) return false;
+
+            const mentionsMatplotlib = (message || '').toLowerCase().includes('matplotlib');
+            const responseText = mentionsMatplotlib
+                ? '\u5df2\u6839\u636e\u4e0a\u4e00\u8f6e\u67e5\u8be2\u7ed3\u679c\u4e3a\u4f60\u7ed8\u5236\u56fe\u8868\u3002\u5f53\u524d\u524d\u7aef\u4f7f\u7528 ECharts \u5c55\u793a\uff0c\u4fbf\u4e8e\u76f4\u63a5\u4ea4\u4e92\u67e5\u770b\uff1b\u5982\u679c\u4f60\u8fd8\u9700\u8981 Python matplotlib \u811a\u672c\uff0c\u6211\u4e5f\u53ef\u4ee5\u7ee7\u7eed\u751f\u6210\u3002'
+                : '\u5df2\u6839\u636e\u4e0a\u4e00\u8f6e\u67e5\u8be2\u7ed3\u679c\u4e3a\u4f60\u5c55\u793a\u56fe\u8868\uff0c\u8bf7\u770b\u4e0b\u65b9\u56fe\u8868\u533a\u57df\u3002';
+
+            addMessage(responseText, 'ai', null, {
+                analysis: lastInsightPayload.analysis,
+                chartSpecs: selectedCharts,
+                showCharts: true
+            });
+            chatHistory.push({ role: 'assistant', content: responseText });
+            return true;
+        }
+
+        async function sendMessage(messageOverride = null, options = {}) {
+            const input = document.getElementById('chatInput');
+            const message = String(typeof messageOverride === 'string' ? messageOverride : input.value || '').trim();
+            if (!message) return;
+
+            const displayMessage = String(options.displayMessage || message).trim();
+            if (options.skipUserMessage !== true) {
+                addMessage(displayMessage, 'user');
+                chatHistory.push({ role: 'user', content: displayMessage });
+            }
+
+            if (typeof messageOverride !== 'string') {
+                input.value = '';
+            }
+
+            if (!options.skipChartFollowUp && tryHandleChartFollowUp(message)) {
+                return;
+            }
+
+            const loadingId = addStreamingMessage();
+            const requestStartedAtMs = Date.now();
+            let currentSteps = [buildExecutionPlaceholderStep(loadingId)];
+            setExecutionRequestStartedAt(loadingId, requestStartedAtMs);
+            setExecutionStepsState(loadingId, currentSteps);
+            renderExecutionStepsPanel(loadingId, currentSteps, { loading: true, requestStartedAtMs });
+            updateStreamingStatus(loadingId, getExecutionRunningStatusText(loadingId, currentSteps));
+            ensureExecutionTimer(loadingId);
+
+            try {
+                const response = await fetch(API_BASE + '/api/chat/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message,
+                        history: chatHistory.slice(-10),
+                        session_id: getChatSessionId(),
+                        alias_confirmation: options.aliasConfirmation || null,
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                if (!response.body) {
+                    throw new Error('stream body is empty');
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let finalResponse = null;
+                let streamedAnswerText = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        try {
+                            const data = JSON.parse(line.slice(6));
+
+                            if (data.type === 'step_start') {
+                                const nextStep = {
+                                    node_name: data.node_name || '',
+                                    step: getExecutionStepLabel(data.step, data.node_name),
+                                    status: 'running',
+                                    info: '',
+                                    duration_ms: null,
+                                    timestamp_ms: data.timestamp_ms ?? null,
+                                    started_at_client_ms: Date.now(),
+                                };
+                                const placeholderIndex = currentSteps.findIndex(step => step.synthetic === true);
+                                const hasRealSteps = currentSteps.some(step => step.synthetic !== true);
+                                if (placeholderIndex !== -1 && !hasRealSteps) {
+                                    const placeholderStep = currentSteps[placeholderIndex] || {};
+                                    currentSteps[placeholderIndex] = {
+                                        ...nextStep,
+                                        timestamp_ms: data.timestamp_ms ?? placeholderStep.timestamp_ms ?? null,
+                                        started_at_client_ms: Number(placeholderStep.started_at_client_ms) || nextStep.started_at_client_ms,
+                                    };
+                                } else {
+                                    currentSteps.push(nextStep);
+                                }
+                                setExecutionStepsState(loadingId, currentSteps);
+                                renderExecutionStepsPanel(loadingId, currentSteps, { loading: true, requestStartedAtMs });
+                                updateStreamingStatus(loadingId, getExecutionRunningStatusText(loadingId, currentSteps));
+                            }
+                            else if (data.type === 'step_done') {
+                                const resolvedStepLabel = getExecutionStepLabel(data.step, data.node_name);
+                                const step = [...currentSteps].reverse().find(s => ((data.node_name && s.node_name === data.node_name) || s.step === resolvedStepLabel) && s.status !== 'done')
+                                    || currentSteps.find(s => (data.node_name && s.node_name === data.node_name) || s.step === resolvedStepLabel);
+                                if (step) {
+                                    step.node_name = data.node_name || step.node_name || '';
+                                    step.step = resolvedStepLabel;
+                                    step.status = 'done';
+                                    step.info = data.info || '';
+                                    step.duration_ms = data.duration_ms ?? null;
+                                    step.synthetic = false;
+                                }
+                                setExecutionStepsState(loadingId, currentSteps);
+                                renderExecutionStepsPanel(loadingId, currentSteps, { loading: true, requestStartedAtMs });
+                                updateStreamingStatus(loadingId, getExecutionRunningStatusText(loadingId, currentSteps));
+                            }
+                            else if (data.type === 'answer_delta') {
+                                streamedAnswerText += String(data.delta || '');
+                                updateStreamingAnswerText(loadingId, streamedAnswerText);
+                                updateStreamingStatus(loadingId, `\u6b63\u5728\u751f\u6210\u56de\u7b54 - ${formatDurationMs(Date.now() - requestStartedAtMs)}`);
+                            }
+                            else if (data.type === 'complete') {
+                                finalResponse = data;
+                                if (data.session_id) {
+                                    rememberChatSessionId(data.session_id);
+                                }
+                                if (!streamedAnswerText && data.response) {
+                                    streamedAnswerText = String(data.response || '');
+                                    updateStreamingAnswerText(loadingId, streamedAnswerText);
+                                }
+                            }
+                            else if (data.type === 'error') {
+                                stopExecutionTimer(loadingId);
+                                removeMessage(loadingId);
+                                addMessage('抱歉，查询出错：' + data.error, 'ai');
+                                return;
+                            }
+                        } catch (e) {
+                            console.error('解析 SSE 数据失败:', e, line);
+                        }
+                    }
+                }
+
+                stopExecutionTimer(loadingId);
+
+                if (finalResponse) {
+                    let tableData = null;
+                    let sensorQueryResult = null;
+
+                    if (finalResponse.show_table) {
+                        const tableType = finalResponse.table_type;
+
+                        if (tableType !== 'projects' && tableType !== 'devices' && tableType !== 'project_stats' && finalResponse.query_params) {
+                            console.log('?????????', finalResponse.query_params);
+                            currentQueryParams = finalResponse.query_params;
+
+                            const previewData = finalResponse.table_preview && finalResponse.table_preview.success
+                                ? {
+                                    ...finalResponse.table_preview,
+                                    analysis: finalResponse.analysis || finalResponse.table_preview.analysis,
+                                    chart_specs: Array.isArray(finalResponse.chart_specs) ? finalResponse.chart_specs : finalResponse.table_preview.chart_specs,
+                                    show_charts: typeof finalResponse.show_charts === 'boolean' ? finalResponse.show_charts : finalResponse.table_preview.show_charts,
+                                }
+                                : null;
+
+                            if (previewData) {
+                                sensorQueryResult = previewData;
+                                tableData = buildSensorTableData(previewData, sensorQueryResult.analysis, finalResponse.query_params);
+                            } else {
+                                try {
+                                    const queryResponse = await fetch(API_BASE + '/api/query', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            ...finalResponse.query_params,
+                                            page: 1,
+                                            user_query: message
+                                        })
+                                    });
+                                    const queryData = await queryResponse.json();
+
+                                    if (queryData.success) {
+                                        sensorQueryResult = {
+                                            ...queryData,
+                                            analysis: finalResponse.analysis || queryData.analysis,
+                                            chart_specs: Array.isArray(finalResponse.chart_specs) ? finalResponse.chart_specs : queryData.chart_specs,
+                                            show_charts: typeof finalResponse.show_charts === 'boolean' ? finalResponse.show_charts : queryData.show_charts,
+                                        };
+                                        tableData = buildSensorTableData(queryData, sensorQueryResult.analysis, finalResponse.query_params);
+                                    }
+                                } catch (e) {
+                                    console.error('?????????', e);
+                                }
+                            }
+                        }
+                        else if (tableType === 'projects') {
+                            const projects = Array.isArray(finalResponse.projects)
+                                ? finalResponse.projects
+                                : (Array.isArray(finalResponse.query_params?.projects) ? finalResponse.query_params.projects : []);
+                            if (projects.length) {
+                                tableData = {
+                                    headers: ['ID', '项目名称'],
+                                    rows: projects.map(p => ({
+                                        'ID': p.id || '-',
+                                        '项目名称': p.project_name || '-'
+                                    })),
+                                    total_count: projects.length,
+                                    has_more: false
+                                };
+                            }
+                        }
+                        else if (tableType === 'devices' && finalResponse.devices) {
+                            tableData = {
+                                headers: ['设备代号', '设备名称', '所属项目'],
+                                rows: finalResponse.devices.map(d => ({
+                                    '设备代号': d.device || d.device_code || '-',
+                                    '设备名称': d.name || '-',
+                                    '所属项目': d.project_name || '-'
+                                })),
+                                total_count: finalResponse.devices.length,
+                                has_more: false
+                            };
+                        }
+                        else if (tableType === 'project_stats') {
+                            const projectStats = Array.isArray(finalResponse.project_stats)
+                                ? finalResponse.project_stats
+                                : (Array.isArray(finalResponse.query_params?.stats) ? finalResponse.query_params.stats : []);
+                            if (projectStats.length) {
+                                tableData = {
+                                    headers: ['排名', '项目名称', '设备数量'],
+                                    rows: projectStats.map((s, i) => ({
+                                        '排名': i + 1,
+                                        '项目名称': s.project_name || '-',
+                                        '设备数量': s.device_count || 0
+                                    })),
+                                    total_count: projectStats.length,
+                                    has_more: false
+                                };
+                            }
+                        }
+                    }
+
+                    const insightPayload = sensorQueryResult && sensorQueryResult.success ? sensorQueryResult : finalResponse;
+                    rememberInsightPayload(insightPayload);
+                    const finalAnswerText = String(finalResponse.response || streamedAnswerText || '');
+                    finalizeStreamingMessage(loadingId, finalAnswerText, tableData, {
+                        analysis: insightPayload.analysis,
+                        chartSpecs: insightPayload.chart_specs,
+                        showCharts: insightPayload.show_charts
+                    }, {
+                        ...finalResponse,
+                        original_question: message,
+                        executionSteps: currentSteps,
+                    });
+                    chatHistory.push({ role: 'assistant', content: finalAnswerText });
+                } else {
+                    addMessage('抱歉，未能获取响应', 'ai');
+                }
+            } catch (error) {
+                console.error('流式请求错误:', error);
+                stopExecutionTimer(loadingId);
+                removeMessage(loadingId);
+                addMessage('网络错误，请稍后重试', 'ai');
+            }
+        }
+
+        function addStreamingMessage() {
+            const container = document.getElementById('chatContainer');
+            const id = 'streaming-' + Date.now();
+            
+            const html = `
+                <div class="flex items-start space-x-3" id="${id}">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-r from-green-400 to-blue-500 flex items-center justify-center text-white font-bold">AI</div>
+                    <div class="message-ai rounded-2xl rounded-tl-none px-4 py-3">
+                        <div class="flex items-center space-x-2">
+                            <div class="loading-spinner"></div>
+                            <span class="text-gray-600" id="${id}-status">正在思考...</span>
+                        </div>
+                        <p class="text-gray-800 whitespace-pre-wrap mt-3" id="${id}-answer" style="display:none;"></p>
+                        <div id="${id}-execution-host"></div>
+                    </div>
+                </div>
+            `;
+            
+            container.insertAdjacentHTML('beforeend', html);
+            container.scrollTop = container.scrollHeight;
+            return id;
+        }
+        
+        // Update streaming status
+        function updateStreamingStatus(id, status) {
+            const statusEl = document.getElementById(id + '-status');
+            if (statusEl) {
+                statusEl.textContent = status;
+            }
+            const container = document.getElementById('chatContainer');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function updateStreamingAnswerText(id, text) {
+            const answerEl = document.getElementById(id + '-answer');
+            if (answerEl) {
+                const nextText = String(text || '');
+                answerEl.textContent = nextText;
+                answerEl.style.display = nextText ? 'block' : 'none';
+            }
+            const container = document.getElementById('chatContainer');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        
+function formatDurationMs(value) {
+            const number = Number(value);
+            if (!Number.isFinite(number) || number < 0) return '-';
+            if (number < 1000) return `${Math.round(number)} ms`;
+            if (number < 10000) return `${(number / 1000).toFixed(1)} s`;
+            return `${(number / 1000).toFixed(0)} s`;
+        }
+
+        function formatExecutionClock(timestampMs) {
+            const number = Number(timestampMs);
+            if (!Number.isFinite(number) || number <= 0) return '';
+            const date = new Date(number);
+            if (Number.isNaN(date.getTime())) return '';
+            const hh = String(date.getHours()).padStart(2, '0');
+            const mm = String(date.getMinutes()).padStart(2, '0');
+            const ss = String(date.getSeconds()).padStart(2, '0');
+            return `${hh}:${mm}:${ss}`;
+        }
+
+        function getPersistedExecutionPanelOpen() {
+            try {
+                const stored = window.localStorage.getItem(EXECUTION_PANEL_STORAGE_KEY);
+                if (stored === '1') return true;
+                if (stored === '0') return false;
+            } catch (error) {
+                console.warn('persist execution panel state failed', error);
+            }
+            return false;
+        }
+
+        function getExecutionStepsState(messageId) {
+            return window['execution_steps_' + messageId] || [];
+        }
+
+        function setExecutionStepsState(messageId, steps) {
+            window['execution_steps_' + messageId] = Array.isArray(steps) ? steps : [];
+        }
+
+        function getExecutionRequestStartedAt(messageId) {
+            const value = Number(window['execution_request_started_' + messageId]);
+            return Number.isFinite(value) && value > 0 ? value : null;
+        }
+
+        function setExecutionRequestStartedAt(messageId, timestampMs) {
+            const value = Number(timestampMs);
+            window['execution_request_started_' + messageId] = Number.isFinite(value) && value > 0 ? value : Date.now();
+        }
+
+        function getExecutionStepLabel(stepLabel, nodeName) {
+            const nodeLabelMap = {
+                intent_parser: '解析 QueryPlan',
+                action_override_policy: '执行查询计划',
+                metadata_mapper: '解析设备范围',
+                sharding_router: '计算数据分片',
+                parallel_fetcher: '执行数据库查询',
+                synthesizer: '生成响应',
+            };
+            if (nodeName && nodeLabelMap[nodeName]) {
+                return nodeLabelMap[nodeName];
+            }
+            return stepLabel || '处理中';
+        }
+
+        function buildExecutionPlaceholderStep(messageId) {
+            const startedAt = getExecutionRequestStartedAt(messageId) || Date.now();
+            return {
+                step: '\u601d\u8003\u4e2d...',
+                status: 'running',
+                info: '\u7b49\u5f85\u540e\u7aef\u8fd4\u56de\u6267\u884c\u6b65\u9aa4',
+                duration_ms: null,
+                timestamp_ms: startedAt,
+                started_at_client_ms: startedAt,
+                synthetic: true,
+            };
+        }
+
+        function getExecutionPanelOpen(messageId) {
+            const key = 'execution_panel_open_' + messageId;
+            if (Object.prototype.hasOwnProperty.call(window, key)) {
+                return Boolean(window[key]);
+            }
+            return getPersistedExecutionPanelOpen();
+        }
+
+        function setExecutionPanelOpen(messageId, isOpen) {
+            const next = Boolean(isOpen);
+            window['execution_panel_open_' + messageId] = next;
+            try {
+                window.localStorage.setItem(EXECUTION_PANEL_STORAGE_KEY, next ? '1' : '0');
+            } catch (error) {
+                console.warn('persist execution panel state failed', error);
+            }
+        }
+
+        function computeExecutionStepDuration(step) {
+            if (
+                step
+                && step.duration_ms !== null
+                && step.duration_ms !== undefined
+                && Number.isFinite(Number(step.duration_ms))
+            ) {
+                return Number(step.duration_ms);
+            }
+            if (step && step.status === 'running' && Number.isFinite(Number(step.started_at_client_ms))) {
+                return Math.max(0, Date.now() - Number(step.started_at_client_ms));
+            }
+            return null;
+        }
+
+        function getExecutionRunningStatusText(messageId, steps = []) {
+            const requestStartedAt = getExecutionRequestStartedAt(messageId);
+            const runningStep = [...(Array.isArray(steps) ? steps : [])].reverse().find(step => step.status === 'running');
+            if (runningStep) {
+                const durationMs = computeExecutionStepDuration(runningStep);
+                if (durationMs !== null) {
+                    return `${runningStep.step || '\u6b63\u5728\u5904\u7406'} \u00b7 ${formatDurationMs(durationMs)}`;
+                }
+                return `${runningStep.step || '\u6b63\u5728\u5904\u7406'}...`;
+            }
+            if (Number.isFinite(requestStartedAt)) {
+                return `\u6b63\u5728\u5904\u7406 \u00b7 ${formatDurationMs(Date.now() - requestStartedAt)}`;
+            }
+            return '\u6b63\u5728\u601d\u8003...';
+        }
+
+        function buildExecutionStepsPanelHtml(messageId, steps, options = {}) {
+            const loading = Boolean(options.loading);
+            const explicitTotalDuration = Number(options.totalDurationMs);
+            const requestStartedAt = Number(options.requestStartedAtMs) || getExecutionRequestStartedAt(messageId);
+            const baseSteps = Array.isArray(steps) ? steps : [];
+            const safeSteps = baseSteps.length ? baseSteps : (loading ? [buildExecutionPlaceholderStep(messageId)] : []);
+            if (!safeSteps.length) return '';
+
+            const doneCount = safeSteps.filter(step => step.status === 'done').length;
+            const runningCount = safeSteps.filter(step => step.status === 'running').length;
+            const aggregatedDuration = Number.isFinite(explicitTotalDuration)
+                ? explicitTotalDuration
+                : (loading && Number.isFinite(requestStartedAt)
+                    ? Math.max(0, Date.now() - requestStartedAt)
+                    : safeSteps.reduce((sum, step) => sum + (computeExecutionStepDuration(step) || 0), 0));
+
+            const summaryBadges = [`<span class="execution-summary-badge">${safeSteps.length} \u6b65</span>`];
+            if (Number.isFinite(aggregatedDuration) && aggregatedDuration >= 0) {
+                summaryBadges.push(`<span class="execution-summary-badge primary">\u603b\u8017\u65f6 ${escapeHtml(formatDurationMs(aggregatedDuration))}</span>`);
+            }
+            if (loading && runningCount > 0) {
+                summaryBadges.push(`<span class="execution-summary-badge">${runningCount} \u4e2a\u8fdb\u884c\u4e2d</span>`);
+            } else if (doneCount > 0) {
+                summaryBadges.push(`<span class="execution-summary-badge">${doneCount} \u4e2a\u5df2\u5b8c\u6210</span>`);
+            }
+
+            const stepItemsHtml = safeSteps.map(step => {
+                const isRunning = step.status === 'running';
+                const durationMs = computeExecutionStepDuration(step);
+                const startedAt = formatExecutionClock(step.timestamp_ms || step.started_at_client_ms);
+                const statusIcon = isRunning
+                    ? '<span class="execution-live-dot"></span>'
+                    : '<span class="execution-step-icon text-green-500">&#10003;</span>';
+                const metaBadges = [];
+                if (startedAt) {
+                    metaBadges.push(`<span class="execution-step-badge">\u5f00\u59cb ${escapeHtml(startedAt)}</span>`);
+                }
+                if (durationMs !== null) {
+                    metaBadges.push(`<span class="execution-step-badge strong">${escapeHtml(formatDurationMs(durationMs))}</span>`);
+                } else if (isRunning) {
+                    metaBadges.push('<span class="execution-step-badge strong">\u8fdb\u884c\u4e2d</span>');
+                }
+                return `
+                    <div class="execution-step-card ${isRunning ? 'running' : ''}">
+                        <div class="execution-step-head">
+                            <div class="execution-step-main">
+                                ${statusIcon}
+                                <div class="execution-step-title">${escapeHtml(step.step || '\u5904\u7406\u4e2d')}</div>
+                            </div>
+                            <div class="execution-step-meta">${metaBadges.join('')}</div>
+                        </div>
+                        ${step.info ? `<div class="execution-step-info">${escapeHtml(step.info)}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+
+            return `
+                <details class="execution-panel" ${getExecutionPanelOpen(messageId) ? 'open' : ''}>
+                    <summary>
+                        <div class="execution-summary-left">
+                            <span class="execution-chevron">&#9654;</span>
+                            <span class="execution-summary-title">\u6267\u884c\u8fc7\u7a0b</span>
+                        </div>
+                        <div class="execution-summary-meta">${summaryBadges.join('')}</div>
+                    </summary>
+                    <div class="execution-steps-list">
+                        ${stepItemsHtml}
+                    </div>
+                </details>
+            `;
+        }
+
+        function renderExecutionStepsPanel(messageId, steps = null, options = {}) {
+            const host = document.getElementById(`${messageId}-execution-host`);
+            if (!host) return;
+            const nextSteps = Array.isArray(steps) ? steps : getExecutionStepsState(messageId);
+            if (!nextSteps.length && !options.loading) {
+                host.innerHTML = '';
+                return;
+            }
+            host.innerHTML = buildExecutionStepsPanelHtml(messageId, nextSteps, options);
+            const detailsEl = host.querySelector('details');
+            if (detailsEl) {
+                detailsEl.addEventListener('toggle', () => setExecutionPanelOpen(messageId, detailsEl.open));
+            }
+        }
+
+        function ensureExecutionTimer(messageId) {
+            stopExecutionTimer(messageId);
+            executionStepTimers.set(messageId, window.setInterval(() => {
+                const steps = getExecutionStepsState(messageId);
+                const messageEl = document.getElementById(messageId);
+                if (!messageEl) {
+                    stopExecutionTimer(messageId);
+                    return;
+                }
+                renderExecutionStepsPanel(messageId, steps, { loading: true, requestStartedAtMs: getExecutionRequestStartedAt(messageId) });
+                updateStreamingStatus(messageId, getExecutionRunningStatusText(messageId, steps));
+            }, 200));
+        }
+
+        function stopExecutionTimer(messageId) {
+            const timerId = executionStepTimers.get(messageId);
+            if (timerId) {
+                window.clearInterval(timerId);
+                executionStepTimers.delete(messageId);
+            }
+        }
+
+        
+function askQuestion(question) {
+            document.getElementById('chatInput').value = question;
+            sendMessage();
+        }
+
+        // 添加消息
+        function formatSummaryMetric(value, decimals = 2, suffix = '') {
+            if (value === null || value === undefined || value === '') return '-';
+            const number = Number(value);
+            if (!Number.isFinite(number)) return String(value);
+            return `${number.toFixed(decimals)}${suffix}`;
+        }
+
+        function buildComparisonSummaryTable(analysis) {
+            if (!analysis || analysis.mode !== 'comparison' || !Array.isArray(analysis.devices) || !analysis.devices.length) {
+                return null;
+            }
+
+            const unit = analysis.unit ? ` ${analysis.unit}` : '';
+            const avgRanking = Array.isArray(analysis.rankings?.avg) ? analysis.rankings.avg : [];
+            const rankMap = new Map(avgRanking.map((item, index) => [item.name, index + 1]));
+            const rows = [...analysis.devices]
+                .sort((left, right) => {
+                    const leftRank = rankMap.get(left.name) || Number.MAX_SAFE_INTEGER;
+                    const rightRank = rankMap.get(right.name) || Number.MAX_SAFE_INTEGER;
+                    if (leftRank !== rightRank) return leftRank - rightRank;
+                    return String(left.name || '').localeCompare(String(right.name || ''));
+                })
+                .map((device, index) => ({
+                    '排名': rankMap.get(device.name) || index + 1,
+                    '设备': device.name || '-',
+                    '趋势': device.trend || '-',
+                    '平均值': formatSummaryMetric(device.avg, 2, unit),
+                    '总量': formatSummaryMetric(device.sum, 2, unit),
+                    '最大值': formatSummaryMetric(device.max, 2, unit),
+                    '最小值': formatSummaryMetric(device.min, 2, unit),
+                    '波动CV': formatSummaryMetric(device.cv, 2, '%'),
+                    '异常占比': formatSummaryMetric(device.anomaly_ratio, 2, '%'),
+                }));
+
+            return {
+                headers: ['排名', '设备', '趋势', '平均值', '总量', '最大值', '最小值', '波动CV', '异常占比'],
+                rows,
+                total_count: rows.length,
+                has_more: false,
+                page_size: rows.length || 20,
+                is_summary: true,
+            };
+        }
+
+        function buildDetailTableRows(records) {
+            if (!Array.isArray(records)) return [];
+            return records.map(d => ({
+                '时间': d.time || '-',
+                '设备': d.device || '-',
+                '标签': d.tag || '-',
+                '数值': d.value ?? '-'
+            }));
+        }
+
+        function buildDetailTableView(queryData, queryParams = null) {
+            if (!queryData || !Array.isArray(queryData.data) || !queryData.data.length) {
+                return null;
+            }
+
+            return {
+                headers: ['时间', '设备', '标签', '数值'],
+                rows: buildDetailTableRows(queryData.data),
+                total_count: queryData.total_count,
+                has_more: queryData.has_more,
+                page_size: 20,
+                server_page_size: Math.max(1, Number(queryParams?.page_size) || 50),
+                query_params: queryParams ? { ...queryParams } : null,
+                view_label: '原始明细'
+            };
+        }
+
+        function buildFocusedTableView(queryData) {
+            const focusedTable = queryData?.focused_table;
+            if (!focusedTable || !Array.isArray(focusedTable.headers) || !Array.isArray(focusedTable.rows) || !focusedTable.rows.length) {
+                return null;
+            }
+
+            return {
+                headers: focusedTable.headers,
+                rows: focusedTable.rows,
+                total_count: Number(focusedTable.total_count ?? focusedTable.rows.length) || focusedTable.rows.length,
+                has_more: Boolean(focusedTable.has_more),
+                page_size: Math.max(1, Number(focusedTable.page_size) || focusedTable.rows.length || 10),
+                view_label: focusedTable.view_label || '问题直答'
+            };
+        }
+
+        function buildSensorTableData(queryData, preferredAnalysis = null, queryParams = null) {
+            if (!queryData || !queryData.success) return null;
+
+            const focusedTable = buildFocusedTableView(queryData);
+            const comparisonSummaryTable = buildComparisonSummaryTable(preferredAnalysis || queryData.analysis);
+            const detailTable = buildDetailTableView(queryData, queryParams);
+
+            if (focusedTable && detailTable) {
+                return {
+                    has_toggle: true,
+                    active_view: 'summary',
+                    views: {
+                        summary: focusedTable,
+                        detail: detailTable,
+                    }
+                };
+            }
+
+            if (focusedTable) {
+                return focusedTable;
+            }
+
+            if (comparisonSummaryTable && detailTable) {
+                return {
+                    has_toggle: true,
+                    active_view: 'summary',
+                    views: {
+                        summary: {
+                            ...comparisonSummaryTable,
+                            view_label: '汇总对比'
+                        },
+                        detail: detailTable,
+                    }
+                };
+            }
+
+            return detailTable;
+        }
+
+        function buildInlineInsightHtml(messageId, insightData) {
+            if (!insightData) return '';
+
+            const analysis = insightData.analysis;
+            const chartSpecs = insightData.showCharts ? (insightData.chartSpecs || []) : [];
+            let analysisHtml = '';
+            let chartsHtml = '';
+
+            if (analysis && (analysis.headline || (analysis.summary_cards || []).length || (analysis.insights || []).length)) {
+                const analysisScopeLabel = String(analysis.analysis_scope_label || '').trim();
+                analysisHtml = `
+                    <div class="mt-4 insight-inline-panel rounded-2xl border border-gray-200 p-4">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <div class="text-base font-semibold text-gray-800">\u667a\u80fd\u5206\u6790</div>
+                            ${analysisScopeLabel ? `<span class="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">${escapeHtml(analysisScopeLabel)}</span>` : ''}
+                        </div>
+                        ${analysis.headline ? `<div class="mt-2 text-sm text-gray-600">${escapeHtml(analysis.headline)}</div>` : ''}
+                        ${(analysis.summary_cards || []).length ? `
+                            <div class="mt-3 insight-inline-grid">
+                                ${(analysis.summary_cards || []).map(card => `
+                                    <div class="rounded-xl border border-gray-100 bg-gray-50 px-3 py-3">
+                                        <div class="text-xs text-gray-500">${escapeHtml(card.label || '')}</div>
+                                        <div class="mt-1 text-lg font-semibold text-gray-800">${escapeHtml(card.value || '-')}</div>
+                                        <div class="mt-1 text-xs text-gray-500">${escapeHtml(card.detail || '')}</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        ` : ''}
+                        ${(analysis.insights || []).length ? `
+                            <ul class="mt-3 space-y-2 text-sm text-gray-700 list-disc list-inside">
+                                ${(analysis.insights || []).map(item => `<li>${escapeHtml(item)}</li>`).join('')}
+                            </ul>
+                        ` : ''}
+                    </div>
+                `;
+            }
+
+            if (Array.isArray(chartSpecs) && chartSpecs.length > 0) {
+                chartsHtml = `
+                    <div class="mt-4 insight-inline-panel rounded-2xl border border-gray-200 p-4">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="text-base font-semibold text-gray-800">\u5206\u6790\u56fe\u8868</div>
+                            <div class="text-xs text-gray-500">\u652f\u6301\u653e\u5927\u67e5\u770b\uff0c\u4e5f\u53ef\u4ee5\u8c03\u8282\u56fe\u8868\u9ad8\u5ea6\u3002</div>
+                        </div>
+                        <div class="mt-3 inline-chart-list">
+                            ${chartSpecs.map((spec, index) => {
+                                const chartId = `${messageId}-${index}`;
+                                const height = Math.max(Number(spec.height || 360), 320);
+                                return `
+                                    <div class="rounded-2xl border border-gray-200 bg-white p-3">
+                                        <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                                            <div class="text-sm font-medium text-gray-700">${escapeHtml(spec.title || `\u56fe\u8868 ${index + 1}`)}</div>
+                                            <div class="flex items-center gap-2 text-xs flex-wrap">
+                                                <button onclick="adjustInlineChartHeight('${chartId}', -80)" class="px-2 py-1 border rounded-lg hover:bg-gray-50">\u7f29\u5c0f</button>
+                                                <button onclick="adjustInlineChartHeight('${chartId}', 80)" class="px-2 py-1 border rounded-lg hover:bg-gray-50">\u653e\u5927</button>
+                                                <button onclick="toggleInlineChartExpanded('${chartId}')" class="px-2 py-1 border rounded-lg hover:bg-gray-50">\u5c55\u5f00/\u8fd8\u539f</button>
+                                                <button onclick="openInlineChartModal('${chartId}')" class="px-2 py-1 border rounded-lg hover:bg-gray-50">\u5168\u5c4f</button>
+                                            </div>
+                                        </div>
+                                        <div class="inline-chart-stage" id="inline-chart-stage-${chartId}" style="height:${height}px;">
+                                            <div class="inline-chart-canvas" id="inline-chart-${chartId}"></div>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            return analysisHtml + chartsHtml;
+        }
+
+        function disposeInlineChart(chartId) {
+            const observer = inlineChartResizeObservers.get(chartId);
+            if (observer) {
+                try {
+                    observer.disconnect();
+                } catch (error) {
+                    console.warn('disconnect inline chart observer failed', error);
+                }
+                inlineChartResizeObservers.delete(chartId);
+            }
+
+            const frameId = inlineChartResizeFrames.get(chartId);
+            if (frameId) {
+                try {
+                    cancelAnimationFrame(frameId);
+                } catch (error) {
+                    console.warn('cancel inline chart frame failed', error);
+                }
+                inlineChartResizeFrames.delete(chartId);
+            }
+
+            inlineChartResizeStates.delete(chartId);
+
+            const chart = inlineChartInstances.get(chartId);
+            if (chart) {
+                try {
+                    chart.dispose();
+                } catch (error) {
+                    console.warn('dispose inline chart failed', error);
+                }
+                inlineChartInstances.delete(chartId);
+            }
+        }
+
+        function disposeInlineChartsForMessage(messageId) {
+            const prefix = `${messageId}-`;
+            Array.from(inlineChartInstances.keys()).forEach(chartId => {
+                if (chartId.startsWith(prefix)) {
+                    disposeInlineChart(chartId);
+                    inlineChartSpecs.delete(chartId);
+                }
+            });
+        }
+
+        function resizeInlineChart(chartId) {
+            const chart = inlineChartInstances.get(chartId);
+            const stage = document.getElementById(`inline-chart-stage-${chartId}`);
+            const container = document.getElementById(`inline-chart-${chartId}`);
+            if (!chart || !stage || !container) return;
+
+            const width = Math.round(stage.clientWidth || container.clientWidth || 0);
+            const height = Math.round(stage.clientHeight || container.clientHeight || 0);
+            if (!width || !height) return;
+
+            const previous = inlineChartResizeStates.get(chartId);
+            if (previous && previous.width === width && previous.height === height) {
+                return;
+            }
+            inlineChartResizeStates.set(chartId, { width, height });
+
+            const pendingFrame = inlineChartResizeFrames.get(chartId);
+            if (pendingFrame) {
+                cancelAnimationFrame(pendingFrame);
+            }
+
+            const frameId = requestAnimationFrame(() => {
+                inlineChartResizeFrames.delete(chartId);
+                try {
+                    chart.resize({ width, height, silent: true });
+                } catch (error) {
+                    console.warn('resize inline chart failed', error);
+                }
+            });
+            inlineChartResizeFrames.set(chartId, frameId);
+        }
+
+        function initInlineCharts(messageId, chartSpecs) {
+            if (!Array.isArray(chartSpecs) || !chartSpecs.length || !window.echarts) return;
+            disposeInlineChartsForMessage(messageId);
+            chartSpecs.forEach((spec, index) => {
+                const chartId = `${messageId}-${index}`;
+                const container = document.getElementById(`inline-chart-${chartId}`);
+                const stage = document.getElementById(`inline-chart-stage-${chartId}`);
+                if (!container || !stage || !spec.option) return;
+
+                const existingChart = echarts.getInstanceByDom(container);
+                if (existingChart) {
+                    try {
+                        existingChart.dispose();
+                    } catch (error) {
+                        console.warn('dispose existing chart failed', error);
+                    }
+                }
+
+                const chart = echarts.init(container);
+                const option = JSON.parse(JSON.stringify(spec.option));
+                if (Array.isArray(option.series)) {
+                    option.series = option.series.filter(Boolean);
+                }
+                chart.setOption(option, true);
+                inlineChartInstances.set(chartId, chart);
+                inlineChartSpecs.set(chartId, {
+                    title: spec.title || `图表 ${index + 1}`,
+                    option,
+                });
+                resizeInlineChart(chartId);
+
+                if (window.ResizeObserver) {
+                    const observer = new ResizeObserver(() => {
+                        resizeInlineChart(chartId);
+                    });
+                    observer.observe(stage);
+                    inlineChartResizeObservers.set(chartId, observer);
+                }
+            });
+        }
+
+        function adjustInlineChartHeight(chartId, delta) {
+            const stage = document.getElementById(`inline-chart-stage-${chartId}`);
+            if (!stage) return;
+            const currentHeight = parseInt(stage.style.height || stage.offsetHeight || 360, 10);
+            const nextHeight = Math.min(900, Math.max(280, currentHeight + delta));
+            stage.style.height = `${nextHeight}px`;
+            setTimeout(() => resizeInlineChart(chartId), 0);
+        }
+
+        function toggleInlineChartExpanded(chartId) {
+            const stage = document.getElementById(`inline-chart-stage-${chartId}`);
+            if (!stage) return;
+            stage.classList.toggle('expanded');
+            if (stage.classList.contains('expanded')) {
+                stage.style.height = '560px';
+            } else if (parseInt(stage.style.height || '0', 10) > 560) {
+                stage.style.height = '360px';
+            }
+            setTimeout(() => resizeInlineChart(chartId), 0);
+        }
+
+        function openInlineChartModal(chartId) {
+            const meta = inlineChartSpecs.get(chartId);
+            const modal = document.getElementById('chartModal');
+            const title = document.getElementById('chartModalTitle');
+            const canvas = document.getElementById('chartModalCanvas');
+            if (!meta || !modal || !title || !canvas || !window.echarts) return;
+
+            title.textContent = meta.title || '全屏图表';
+            modal.classList.add('show');
+            document.body.style.overflow = 'hidden';
+
+            if (fullscreenChart) {
+                try {
+                    fullscreenChart.dispose();
+                } catch (error) {
+                    console.warn('dispose fullscreen chart failed', error);
+                }
+            }
+
+            fullscreenChartMeta = meta;
+            fullscreenChart = echarts.init(canvas);
+            fullscreenChart.setOption(JSON.parse(JSON.stringify(meta.option)), true);
+            setTimeout(() => {
+                try {
+                    fullscreenChart.resize();
+                } catch (error) {
+                    console.warn('resize fullscreen chart failed', error);
+                }
+            }, 0);
+        }
+
+        function closeChartModal(event = null) {
+            if (event && event.target && event.target.id && event.target.id !== 'chartModal') {
+                return;
+            }
+            const modal = document.getElementById('chartModal');
+            if (modal) {
+                modal.classList.remove('show');
+            }
+            document.body.style.overflow = '';
+            if (fullscreenChart) {
+                try {
+                    fullscreenChart.dispose();
+                } catch (error) {
+                    console.warn('dispose fullscreen chart failed', error);
+                }
+                fullscreenChart = null;
+                fullscreenChartMeta = null;
+            }
+        }
+
+        function normalizeChatTableState(tableData, fallbackQueryParams = null) {
+            if (!tableData) return null;
+
+            const cloneQueryParams = (params) => params ? ({ ...params }) : null;
+            if (tableData.views && typeof tableData.views === 'object') {
+                const viewNames = Object.keys(tableData.views).filter(name => tableData.views[name]);
+                if (!viewNames.length) return null;
+
+                const views = {};
+                viewNames.forEach(name => {
+                    const view = tableData.views[name];
+                    const rows = Array.isArray(view.rows) ? [...view.rows] : [];
+                    const headers = Array.isArray(view.headers)
+                        ? view.headers
+                        : (rows.length ? Object.keys(rows[0]) : []);
+                    views[name] = {
+                        headers,
+                        rows,
+                        currentPage: 1,
+                        pageSize: Math.max(1, Number(view.page_size) || 20),
+                        totalCount: Number(view.total_count ?? rows.length) || rows.length,
+                        hasMore: Boolean(view.has_more),
+                        queryParams: cloneQueryParams(view.query_params) || cloneQueryParams(fallbackQueryParams),
+                        serverPageSize: Math.max(1, Number(view.server_page_size) || Number(view.query_params?.page_size) || Number(fallbackQueryParams?.page_size) || 50),
+                        viewLabel: view.view_label || name,
+                    };
+                });
+
+                const activeView = views[tableData.active_view] ? tableData.active_view : viewNames[0];
+                return {
+                    activeView,
+                    hasToggle: Boolean(tableData.has_toggle && views.summary && views.detail),
+                    views,
+                };
+            }
+
+            const rows = Array.isArray(tableData.rows) ? [...tableData.rows] : [];
+            const headers = Array.isArray(tableData.headers)
+                ? tableData.headers
+                : (rows.length ? Object.keys(rows[0]) : []);
+            return {
+                activeView: 'default',
+                hasToggle: false,
+                views: {
+                    default: {
+                        headers,
+                        rows,
+                        currentPage: 1,
+                        pageSize: Math.max(1, Number(tableData.page_size) || 20),
+                        totalCount: Number(tableData.total_count ?? rows.length) || rows.length,
+                        hasMore: Boolean(tableData.has_more),
+                        queryParams: cloneQueryParams(tableData.query_params) || cloneQueryParams(fallbackQueryParams),
+                        serverPageSize: Math.max(1, Number(tableData.server_page_size) || Number(tableData.query_params?.page_size) || Number(fallbackQueryParams?.page_size) || 50),
+                        viewLabel: tableData.view_label || 'default',
+                    }
+                }
+            };
+        }
+
+        function getActiveChatTableView(tableState) {
+            if (!tableState || !tableState.views) return null;
+            return tableState.views[tableState.activeView] || null;
+        }
+
+        function buildChatTableRowsHtml(headers, rows) {
+            return rows.map(row => `
+                <tr class="hover:bg-gray-50">
+                    ${headers.map(h => `<td class="px-3 py-2 text-gray-600">${escapeHtml(String(row[h] ?? '-'))}</td>`).join('')}
+                </tr>
+            `).join('');
+        }
+
+        function updateChatTableToggleButtons(tableId, tableState) {
+            ['summary', 'detail'].forEach(viewName => {
+                const button = document.getElementById(`${tableId}-toggle-${viewName}`);
+                if (!button) return;
+                const active = tableState.activeView === viewName;
+                button.className = active
+                    ? 'px-3 py-1 text-xs rounded-lg border border-indigo-600 bg-indigo-600 text-white'
+                    : 'px-3 py-1 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50';
+            });
+        }
+
+        function switchChatTableView(tableId, viewName) {
+            const tableState = window['tableData_' + tableId];
+            if (!tableState || !tableState.views || !tableState.views[viewName]) return;
+            tableState.activeView = viewName;
+            renderChatTable(tableId, tableState);
+        }
+
+        const CLARIFICATION_PAGE_SIZE = 10;
+
+        function formatClarificationMatchedField(field) {
+            const fieldMap = {
+                device: '设备代号',
+                name: '设备名称',
+                device_name: '设备名称',
+                project_name: '项目名称',
+                project_code_name: '项目代号',
+                device_type: '设备类型',
+                semantic: '语义相似',
+                session_alias: '会话已确认设备',
+            };
+            const normalized = String(field || '').trim();
+            return fieldMap[normalized] || normalized;
+        }
+
+        function formatClarificationReasonPart(part) {
+            const normalized = String(part || '').trim();
+            if (!normalized) return '';
+
+            const directMap = {
+                exact_device_code: '设备代号精确匹配',
+                query_contains_device_code: '问题中直接包含设备代号',
+                lexical_match: '文本关键词匹配',
+                session_alias: '沿用本会话已确认设备',
+                'SQL LIKE 模糊匹配': '文本模糊匹配',
+                '设备代号格式命中': '符合设备代号格式',
+                '设备代号精确匹配': '设备代号精确匹配',
+                '设备代号包含关键词': '设备代号包含关键词',
+                '设备代号覆盖全部关键词': '设备代号覆盖全部关键词',
+                '设备名称精确匹配': '设备名称精确匹配',
+                '设备名称包含关键词': '设备名称包含关键词',
+                '设备名称覆盖全部关键词': '设备名称覆盖全部关键词',
+                '项目名称精确匹配': '项目名称精确匹配',
+                '项目名称包含关键词': '项目名称包含关键词',
+                '项目名称覆盖全部关键词': '项目名称覆盖全部关键词',
+                '项目代号精确匹配': '项目代号精确匹配',
+                '项目代号包含关键词': '项目代号包含关键词',
+                '项目代号覆盖全部关键词': '项目代号覆盖全部关键词',
+                '设备类型精确匹配': '设备类型精确匹配',
+                '设备类型包含关键词': '设备类型包含关键词',
+                '设备类型覆盖全部关键词': '设备类型覆盖全部关键词',
+            };
+            if (directMap[normalized]) {
+                return directMap[normalized];
+            }
+
+            const semanticMatch = normalized.match(/^semantic_similarity=(\d+(?:\.\d+)?)$/i);
+            if (semanticMatch) {
+                return `语义相似度高：${semanticMatch[1]}`;
+            }
+
+            return normalized;
+        }
+
+        function buildClarificationReason(candidate) {
+            if (!candidate) return '';
+            const matchReason = String(candidate.match_reason || '').trim();
+            if (matchReason) {
+                const parts = matchReason
+                    .split(/\s*[\uFF0C|]\s*/)
+                    .map(formatClarificationReasonPart)
+                    .filter(Boolean);
+                if (parts.length) {
+                    return [...new Set(parts)].join('\uFF0C');
+                }
+            }
+            if (Array.isArray(candidate.matched_fields) && candidate.matched_fields.length) {
+                const fields = candidate.matched_fields
+                    .map(formatClarificationMatchedField)
+                    .filter(Boolean);
+                if (fields.length) {
+                    return `\u547d\u4e2d\u5b57\u6bb5\uff1a${[...new Set(fields)].join('\u3001')}`;
+                }
+            }
+            if (String(candidate.match_type || '').trim() === 'semantic') {
+                return '\u8bed\u4e49\u5339\u914d';
+            }
+            return '';
+        }
+
+        function getClarificationUiState(messageId, groupIndex) {
+            if (!window.__clarificationUiState) {
+                window.__clarificationUiState = {};
+            }
+            const stateKey = `${messageId}:${groupIndex}`;
+            if (!window.__clarificationUiState[stateKey]) {
+                window.__clarificationUiState[stateKey] = { page: 1 };
+            }
+            return window.__clarificationUiState[stateKey];
+        }
+
+        function buildClarificationCandidateCardHtml(messageId, groupIndex, candidate, candidateIndex) {
+            const projectName = candidate.project_name || candidate.project_code_name || '-';
+            const matchReason = buildClarificationReason(candidate);
+            const matchType = String(candidate.match_type || '').trim();
+            const isExactCodeConflict = matchType === 'exact_code_conflict';
+            const isAggregateAllOption = matchType === 'aggregate_all_option' || String(candidate.scope_mode || '').trim() === 'aggregate_all';
+            const hasSemanticScore = matchType === 'semantic' && Number.isFinite(Number(candidate.match_score));
+            const badgeHtml = isExactCodeConflict
+                ? `<span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">\u7cbe\u786e\u7801\u547d\u4e2d</span>`
+                : (isAggregateAllOption
+                    ? `<span class="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">\u8de8\u9879\u76ee\u6c47\u603b</span>`
+                    : (hasSemanticScore
+                        ? `<span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">score ${escapeHtml(Number(candidate.match_score).toFixed(1))}</span>`
+                        : ''));
+            return `
+                <div class="rounded-lg border border-gray-200 p-3">
+                    <div class="flex items-start justify-between gap-3 flex-wrap">
+                        <div class="min-w-0 flex-1">
+                            <div class="text-sm font-medium text-gray-900 break-all">${escapeHtml(candidate.device || '-')}</div>
+                            <div class="text-sm text-gray-700 break-all">${escapeHtml(candidate.name || '\u672a\u547d\u540d\u8bbe\u5907')}</div>
+                            <div class="text-xs text-gray-500 mt-1">${escapeHtml(projectName)}</div>
+                            ${matchReason && !isExactCodeConflict ? `<div class="text-xs text-amber-700 mt-2">${escapeHtml(matchReason)}</div>` : ''}
+                        </div>
+                        <div class="flex flex-col items-end gap-2">
+                            ${badgeHtml}
+                            <button onclick="confirmClarificationCandidate('${messageId}', ${groupIndex}, ${candidateIndex})" class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-700">${isAggregateAllOption ? '\u9009\u5168\u90e8' : '\u9009\u8fd9\u4e2a\u8bbe\u5907'}</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function buildClarificationGroupInnerHtml(messageId, group, groupIndex) {
+            const candidates = Array.isArray(group.candidates) ? group.candidates : [];
+            const totalCount = candidates.length;
+            const totalPages = Math.max(1, Math.ceil(totalCount / CLARIFICATION_PAGE_SIZE));
+            const state = getClarificationUiState(messageId, groupIndex);
+            const page = Math.min(Math.max(Number(state.page) || 1, 1), totalPages);
+            state.page = page;
+
+            const pageStartIndex = (page - 1) * CLARIFICATION_PAGE_SIZE;
+            const pageCandidates = candidates.slice(pageStartIndex, pageStartIndex + CLARIFICATION_PAGE_SIZE);
+            const visibleStart = totalCount ? pageStartIndex + 1 : 0;
+            const visibleEnd = pageStartIndex + pageCandidates.length;
+
+            return `
+                <div class="text-xs text-gray-500">\u5f85\u786e\u8ba4\u5173\u952e\u8bcd</div>
+                <div class="mt-1 text-sm font-semibold text-gray-800">${escapeHtml(group.keyword || `\u76ee\u6807 ${groupIndex + 1}`)}</div>
+                <div class="mt-2 flex items-center justify-between gap-3 flex-wrap text-xs text-amber-700">
+                    <span>\u5171 ${totalCount} \u4e2a\u5019\u9009</span>
+                    <span>\u5f53\u524d\u9875\u8303\u56f4 ${visibleStart}-${visibleEnd}</span>
+                </div>
+                <div class="mt-3 space-y-2">
+                    ${pageCandidates.map((candidate, pageIndex) => buildClarificationCandidateCardHtml(messageId, groupIndex, candidate, pageStartIndex + pageIndex)).join('')}
+                </div>
+                ${totalPages > 1 ? `
+                    <div class="mt-3 flex items-center justify-end gap-2 text-xs">
+                        <button onclick="changeClarificationPage('${messageId}', ${groupIndex}, -1)" class="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50" ${page <= 1 ? 'disabled' : ''}>\u4e0a\u4e00\u9875</button>
+                        <span class="text-gray-500">\u7b2c ${page} / ${totalPages} \u9875</span>
+                        <button onclick="changeClarificationPage('${messageId}', ${groupIndex}, 1)" class="px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50" ${page >= totalPages ? 'disabled' : ''}>\u4e0b\u4e00\u9875</button>
+                    </div>
+                ` : ''}
+            `;
+        }
+
+        function renderClarificationGroup(messageId, groupIndex) {
+            const groups = window['clarification_' + messageId];
+            if (!Array.isArray(groups)) return;
+            const group = groups[groupIndex];
+            const container = document.getElementById(`clarification-group-${messageId}-${groupIndex}`);
+            if (!group || !container) return;
+            container.innerHTML = buildClarificationGroupInnerHtml(messageId, group, groupIndex);
+        }
+
+        function changeClarificationPage(messageId, groupIndex, delta) {
+            const groups = window['clarification_' + messageId];
+            if (!Array.isArray(groups)) return;
+            const group = groups[groupIndex];
+            const candidates = group && Array.isArray(group.candidates) ? group.candidates : [];
+            const totalPages = Math.max(1, Math.ceil(candidates.length / CLARIFICATION_PAGE_SIZE));
+            const state = getClarificationUiState(messageId, groupIndex);
+            const nextPage = Math.min(Math.max((Number(state.page) || 1) + delta, 1), totalPages);
+            if (nextPage === state.page) return;
+            state.page = nextPage;
+            renderClarificationGroup(messageId, groupIndex);
+        }
+
+        function prefillClarificationCandidate(messageId, groupIndex, candidateIndex) {
+            const groups = window['clarification_' + messageId];
+            if (!Array.isArray(groups)) return;
+            const group = groups[groupIndex];
+            const candidate = group && Array.isArray(group.candidates) ? group.candidates[candidateIndex] : null;
+            if (!group || !candidate) return;
+
+            const target = group.keyword || '这个目标';
+            const deviceCode = candidate.device || '';
+            const deviceName = candidate.name || '';
+            const projectName = candidate.project_name || candidate.project_code_name || '';
+            const parts = [`我说的${target}是${deviceCode}`];
+            if (deviceName || projectName) {
+                const detailParts = [];
+                if (deviceName) detailParts.push(deviceName);
+                if (projectName) detailParts.push(`项目：${projectName}`);
+                parts.push(`（${detailParts.join('，')}）`);
+            }
+
+            const input = document.getElementById('chatInput');
+            input.value = parts.join('');
+            input.focus();
+        }
+
+        function buildAggregateScopeQuestion(originalQuestion, alias) {
+            const normalizedAlias = String(alias || '').trim();
+            const question = String(originalQuestion || '').trim();
+            if (!normalizedAlias) return question;
+            const aggregatePhrase = `汇总所有 ${normalizedAlias}`;
+            if (!question) return aggregatePhrase;
+            if (question.includes(aggregatePhrase)) return question;
+            return question.includes(normalizedAlias)
+                ? question.replace(normalizedAlias, aggregatePhrase)
+                : `${aggregatePhrase}：${question}`;
+        }
+
+        function confirmClarificationCandidate(messageId, groupIndex, candidateIndex) {
+            const groups = window['clarification_' + messageId] || [];
+            const group = groups[groupIndex];
+            const candidate = group && Array.isArray(group.candidates) ? group.candidates[candidateIndex] : null;
+            const meta = window['clarification_meta_' + messageId];
+            if (!group || !candidate) return;
+
+            const alias = group.keyword || '当前设备';
+            const deviceCode = candidate.device || '';
+            const deviceName = candidate.name || '';
+            const projectName = candidate.project_name || candidate.project_code_name || '';
+            const isAggregateAllOption = String(candidate.match_type || '').trim() === 'aggregate_all_option' || String(candidate.scope_mode || '').trim() === 'aggregate_all';
+            const details = [];
+            if (deviceName) details.push(deviceName);
+            if (projectName) details.push(`项目：${projectName}`);
+            const detailText = details.length ? `（${details.join('，')}）` : '';
+            const originalQuestion = String(meta && (meta.original_question || meta.query_params?.user_query) || '').trim();
+            if (isAggregateAllOption) {
+                const displayMessage = `已切换为跨项目汇总：${alias}${detailText}，继续查询原问题`;
+                const nextMessage = buildAggregateScopeQuestion(originalQuestion, alias) || `汇总所有 ${alias}`;
+                sendMessage(nextMessage, {
+                    displayMessage,
+                    skipChartFollowUp: true,
+                });
+                return;
+            }
+            const displayMessage = `已确认：${alias} -> ${deviceCode}${detailText}，继续查询原问题`;
+            const nextMessage = originalQuestion || `${deviceCode}`;
+            sendMessage(nextMessage, {
+                displayMessage,
+                aliasConfirmation: {
+                    alias,
+                    device: candidate.device,
+                    name: candidate.name,
+                    project_id: candidate.project_id,
+                    project_name: candidate.project_name,
+                    project_code_name: candidate.project_code_name,
+                    device_type: candidate.device_type,
+                    tg: candidate.tg,
+                    match_type: candidate.match_type,
+                    match_score: candidate.match_score,
+                    matched_fields: candidate.matched_fields,
+                    match_reason: candidate.match_reason,
+                    original_question: originalQuestion,
+                },
+                skipChartFollowUp: true,
+            });
+        }
+
+        function getScopeOriginalQuestion(meta) {
+            return String(meta && (meta.original_question || meta.query_params?.user_query) || '').trim();
+        }
+
+        function requestScopeAliasReset(messageId, alias) {
+            const meta = window['clarification_meta_' + messageId] || window['resolved_scope_meta_' + messageId] || null;
+            const targetAlias = String(alias || '').trim();
+            if (!targetAlias) return;
+            const originalQuestion = getScopeOriginalQuestion(meta);
+            const nextMessage = originalQuestion || `重新确认 ${targetAlias}`;
+            sendMessage(nextMessage, {
+                displayMessage: `重新确认 ${targetAlias}`,
+                aliasConfirmation: {
+                    action: 'reset_alias',
+                    alias: targetAlias,
+                    original_question: originalQuestion,
+                },
+                skipChartFollowUp: true,
+            });
+        }
+
+        function requestClearResolvedScope(messageId) {
+            const meta = window['clarification_meta_' + messageId] || window['resolved_scope_meta_' + messageId] || null;
+            const originalQuestion = getScopeOriginalQuestion(meta);
+            const nextMessage = originalQuestion || '清除当前确认范围';
+            sendMessage(nextMessage, {
+                displayMessage: '清除当前确认范围',
+                aliasConfirmation: {
+                    action: 'clear_scope',
+                    original_question: originalQuestion,
+                },
+                skipChartFollowUp: true,
+            });
+        }
+
+        function buildClarificationCandidatesHtml(messageId, responseMeta) {
+            const groups = responseMeta && responseMeta.clarification_required && Array.isArray(responseMeta.clarification_candidates)
+                ? responseMeta.clarification_candidates
+                : [];
+            if (!groups.length) return '';
+
+            window['clarification_' + messageId] = groups;
+            window['clarification_meta_' + messageId] = responseMeta;
+
+            return `
+                <div class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-3">
+                    <div class="flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <div class="text-sm font-semibold text-amber-900">\u5019\u9009\u8bbe\u5907</div>
+                            <div class="text-xs text-amber-700">\u547d\u4e2d\u4e0d\u786e\u5b9a\uff0c\u8bf7\u5148\u786e\u8ba4\u540e\u518d\u7ee7\u7eed\u67e5\u8be2</div>
+                        </div>
+                        <div class="text-xs text-amber-700">\u6bcf\u9875 10 \u6761\uff0c\u70b9\u51fb\u201c\u9009\u8fd9\u4e2a\u8bbe\u5907\u201d\u4f1a\u81ea\u52a8\u7ee7\u7eed\u67e5\u8be2</div>
+                    </div>
+                    ${groups.map((group, groupIndex) => {
+                        const state = getClarificationUiState(messageId, groupIndex);
+                        state.page = 1;
+                        return `
+                            <div class="rounded-lg border border-amber-100 bg-white p-3">
+                                <div id="clarification-group-${messageId}-${groupIndex}">
+                                    ${buildClarificationGroupInnerHtml(messageId, group, groupIndex)}
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        function buildResolvedScopeHtml(messageId, responseMeta) {
+            const scope = responseMeta && responseMeta.resolved_scope;
+            const items = scope && Array.isArray(scope.items) ? scope.items : [];
+            if (!items.length) {
+                return '';
+            }
+            window['resolved_scope_meta_' + messageId] = responseMeta;
+            const deviceCount = Number(scope.device_count || items.length || 0);
+            const tgCount = Number(scope.tg_count || 0);
+            const aggregationScopeCodes = Array.isArray(scope.aggregation_scope_codes) ? scope.aggregation_scope_codes : [];
+            const aggregationScopeText = aggregationScopeCodes.length ? aggregationScopeCodes.join('\u3001') : '';
+            return `
+                <div class="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3 space-y-3">
+                    ${aggregationScopeCodes.length ? `
+                        <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                            \u5f53\u524d\u4e3a\u8de8\u9879\u76ee\u6c47\u603b\u4f5c\u7528\u57df${aggregationScopeText ? `\uff1a${escapeHtml(aggregationScopeText)}` : ''}
+                        </div>
+                    ` : ''}
+                    <div class="flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <div class="text-sm font-semibold text-indigo-900">\u5f53\u524d\u786e\u8ba4\u4f5c\u7528\u57df</div>
+                            <div class="text-xs text-indigo-700">\u8868\u683c\u3001\u5206\u6790\u4e0e\u56fe\u8868\u5747\u57fa\u4e8e\u4ee5\u4e0b\u8bbe\u5907\u8303\u56f4</div>
+                        </div>
+                        <div class="flex items-center gap-2 flex-wrap text-xs">
+                            <span class="inline-flex items-center rounded-full bg-white px-2.5 py-1 border border-indigo-200 text-indigo-700">\u8bbe\u5907 ${escapeHtml(String(deviceCount))} \u4e2a</span>
+                            <span class="inline-flex items-center rounded-full bg-white px-2.5 py-1 border border-indigo-200 text-indigo-700">TG ${escapeHtml(String(tgCount))} \u4e2a</span>
+                            <button onclick="requestClearResolvedScope('${messageId}')" class="px-2.5 py-1 rounded-lg border border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-100">\u6e05\u9664\u5f53\u524d\u786e\u8ba4\u8303\u56f4</button>
+                        </div>
+                    </div>
+                    <div class="grid gap-2 ${items.length > 1 ? 'md:grid-cols-2' : ''}">
+                        ${items.map(item => {
+                            const deviceLabel = item.device || '-';
+                            const nameLabel = item.name || '\u672a\u547d\u540d\u8bbe\u5907';
+                            const projectLabel = item.project_name || item.project_code_name || '\u672a\u8bc6\u522b\u9879\u76ee';
+                            const tgLabel = item.tg || '\u672a\u8bc6\u522bTG';
+                            const aliasLabel = item.alias && item.alias !== item.device ? item.alias : '';
+                            const canSwitch = Boolean(item.can_switch);
+                            return `
+                                <div class="rounded-lg border border-indigo-100 bg-white p-3">
+                                    <div class="flex items-center justify-between gap-3 flex-wrap">
+                                        <div class="text-sm font-semibold text-gray-900 break-all">${escapeHtml(deviceLabel)}</div>
+                                        <span class="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700 border border-indigo-100">TG ${escapeHtml(tgLabel)}</span>
+                                    </div>
+                                    <div class="mt-1 text-sm text-gray-700 break-all">${escapeHtml(nameLabel)}</div>
+                                    <div class="mt-1 text-xs text-gray-500 break-all">\u9879\u76ee\uff1a${escapeHtml(projectLabel)}</div>
+                                    ${aliasLabel ? `<div class="mt-1 text-xs text-gray-500 break-all">\u786e\u8ba4\u8bcd\uff1a${escapeHtml(aliasLabel)}</div>` : ''}
+                                    <div class="mt-3 flex items-center justify-end">
+                                        ${canSwitch
+                                            ? `<button onclick="requestScopeAliasReset('${messageId}', '${escapeHtml(aliasLabel || deviceLabel)}')" class="px-3 py-1.5 rounded-lg bg-white text-xs text-indigo-700 border border-indigo-200 hover:bg-indigo-100">\u66f4\u6362\u8bbe\u5907</button>`
+                                            : `<span class="text-xs text-gray-400">\u552f\u4e00\u5339\u914d，\u65e0\u9700\u66f4\u6362</span>`}
+                                    </div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function buildAiMessageRenderParts(messageId, text, tableData = null, insightData = null, responseMeta = null) {
+            const tableId = 'table-' + Date.now();
+            let tableHtml = '';
+            const tableState = normalizeChatTableState(tableData, currentQueryParams ? { ...currentQueryParams } : null);
+            if (tableState) {
+                const activeView = getActiveChatTableView(tableState);
+                const headers = activeView.headers || [];
+                const pageSize = activeView.pageSize;
+                const totalRows = activeView.rows.length;
+                const totalCount = activeView.totalCount || totalRows;
+                const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+                const pageRows = activeView.rows.slice(0, pageSize);
+                const showPager = totalPages > 1 || activeView.hasMore;
+                tableHtml = `
+                    <div class="mt-3 overflow-x-auto" id="${tableId}">
+                        ${tableState.hasToggle ? `
+                            <div class="mb-2 flex items-center gap-2 flex-wrap">
+                                <button onclick="switchChatTableView('${tableId}', 'summary')" id="${tableId}-toggle-summary" class="px-3 py-1 text-xs rounded-lg border border-indigo-600 bg-indigo-600 text-white">查看汇总</button>
+                                <button onclick="switchChatTableView('${tableId}', 'detail')" id="${tableId}-toggle-detail" class="px-3 py-1 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">查看原始明细</button>
+                            </div>
+                        ` : ''}
+                        <table class="min-w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
+                            <thead class="bg-gray-100">
+                                <tr id="${tableId}-head">
+                                    ${headers.map(h => `<th class="px-3 py-2 text-left font-medium text-gray-700">${escapeHtml(h)}</th>`).join('')}
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200" id="${tableId}-body">
+                                ${buildChatTableRowsHtml(headers, pageRows)}
+                            </tbody>
+                        </table>
+                        <div class="flex items-center justify-between mt-2 text-xs text-gray-500 gap-3">
+                            <span id="${tableId}-info">显示 1-${Math.min(pageSize, totalRows)} 条，共 ${totalCount} 条记录</span>
+                            <div class="flex items-center space-x-2" id="${tableId}-pager" ${showPager ? '' : 'style="display:none;"'}>
+                                <span id="${tableId}-pageinfo">第 1 / ${activeView.hasMore ? '?' : totalPages} 页</span>
+                                <button onclick="chatTablePrev('${tableId}')" class="px-2 py-1 border rounded hover:bg-gray-100 disabled:opacity-50" id="${tableId}-prev" disabled>上一页</button>
+                                <button onclick="chatTableNext('${tableId}')" class="px-2 py-1 border rounded hover:bg-gray-100" id="${tableId}-next">下一页</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            const clarificationHtml = buildClarificationCandidatesHtml(messageId, responseMeta);
+            const resolvedScopeHtml = buildResolvedScopeHtml(messageId, responseMeta);
+            const inlineInsightHtml = buildInlineInsightHtml(messageId, insightData);
+            const executionSteps = Array.isArray(responseMeta?.executionSteps) ? responseMeta.executionSteps : [];
+            const executionHtml = executionSteps.length ? `<div id="${messageId}-execution-host"></div>` : '';
+            const hasWideContent = Boolean(clarificationHtml || resolvedScopeHtml || inlineInsightHtml);
+            const aiBubbleClass = hasWideContent
+                ? 'message-ai rounded-2xl rounded-tl-none px-4 py-3 w-full max-w-full xl:max-w-5xl'
+                : 'message-ai rounded-2xl rounded-tl-none px-4 py-3 max-w-3xl';
+
+            return {
+                tableId,
+                tableState,
+                tableHtml,
+                clarificationHtml,
+                resolvedScopeHtml,
+                inlineInsightHtml,
+                executionSteps,
+                executionHtml,
+                aiBubbleClass,
+                textHtml: `<p class="text-gray-800 whitespace-pre-wrap">${escapeHtml(text)}</p>`,
+                insightData,
+                responseMeta,
+            };
+        }
+
+        function applyAiMessageBubble(messageId, bubbleEl, text, tableData = null, insightData = null, responseMeta = null) {
+            if (!bubbleEl) return;
+            disposeInlineChartsForMessage(messageId);
+            const renderParts = buildAiMessageRenderParts(messageId, text, tableData, insightData, responseMeta);
+            bubbleEl.className = renderParts.aiBubbleClass;
+            bubbleEl.innerHTML = `
+                ${renderParts.textHtml}
+                ${renderParts.resolvedScopeHtml}
+                ${renderParts.executionHtml}
+                ${renderParts.clarificationHtml}
+                ${renderParts.tableHtml}
+                ${renderParts.inlineInsightHtml}
+            `;
+            if (renderParts.tableState) {
+                setTimeout(() => {
+                    window['tableData_' + renderParts.tableId] = renderParts.tableState;
+                }, 0);
+            }
+            if (renderParts.executionSteps.length) {
+                setTimeout(() => renderExecutionStepsPanel(messageId, renderParts.executionSteps, { totalDurationMs: responseMeta?.total_duration_ms }), 0);
+            }
+            if (insightData && insightData.showCharts && Array.isArray(insightData.chartSpecs) && insightData.chartSpecs.length) {
+                setTimeout(() => initInlineCharts(messageId, insightData.chartSpecs), 0);
+            }
+        }
+
+        function finalizeStreamingMessage(messageId, text, tableData = null, insightData = null, responseMeta = null) {
+            const messageEl = document.getElementById(messageId);
+            if (!messageEl) {
+                return addMessage(text, 'ai', tableData, insightData, responseMeta);
+            }
+            const avatarEl = messageEl.children[0];
+            const bubbleEl = messageEl.children[1];
+            if (avatarEl) {
+                avatarEl.className = 'w-10 h-10 rounded-full bg-gradient-to-r from-green-400 to-blue-500 flex items-center justify-center text-white font-bold flex-shrink-0';
+                avatarEl.textContent = 'AI';
+            }
+            if (!bubbleEl) {
+                return addMessage(text, 'ai', tableData, insightData, responseMeta);
+            }
+            applyAiMessageBubble(messageId, bubbleEl, text, tableData, insightData, responseMeta);
+            const container = document.getElementById('chatContainer');
+            container.scrollTop = container.scrollHeight;
+            return messageId;
+        }
+
+function addMessage(text, type, tableData = null, insightData = null, responseMeta = null) {
+            const container = document.getElementById('chatContainer');
+            const id = 'msg-' + Date.now();
+
+            const html = type === 'user' ? `
+                <div class="flex items-start space-x-3 justify-end" id="${id}">
+                    <div class="message-user text-white rounded-2xl rounded-tr-none px-4 py-3 max-w-xl">
+                        <p>${escapeHtml(text)}</p>
+                    </div>
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-r from-purple-500 to-indigo-600 flex items-center justify-center text-white font-bold">?</div>
+                </div>
+            ` : `
+                <div class="flex items-start space-x-3" id="${id}">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-r from-green-400 to-blue-500 flex items-center justify-center text-white font-bold flex-shrink-0">AI</div>
+                    <div></div>
+                </div>
+            `;
+
+            container.insertAdjacentHTML('beforeend', html);
+            if (type === 'ai') {
+                const bubbleEl = document.querySelector(`#${id} > div:last-child`);
+                applyAiMessageBubble(id, bubbleEl, text, tableData, insightData, responseMeta);
+            }
+            container.scrollTop = container.scrollHeight;
+            return id;
+        }
+
+function chatTablePrev(tableId) {
+            const tableState = window['tableData_' + tableId];
+            const activeView = getActiveChatTableView(tableState);
+            if (!tableState || !activeView || activeView.currentPage <= 1) return;
+
+            activeView.currentPage--;
+            renderChatTable(tableId, tableState);
+        }
+
+        async function chatTableNext(tableId) {
+            const tableState = window['tableData_' + tableId];
+            const activeView = getActiveChatTableView(tableState);
+            if (!tableState || !activeView) return;
+
+            const nextPage = activeView.currentPage + 1;
+            const startIdx = (nextPage - 1) * activeView.pageSize;
+
+            if (startIdx >= activeView.rows.length && activeView.hasMore && activeView.queryParams) {
+                try {
+                    const serverPageSize = activeView.serverPageSize || 50;
+                    const serverPage = Math.floor(activeView.rows.length / serverPageSize) + 1;
+                    const response = await fetch(API_BASE + '/api/query', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            ...activeView.queryParams,
+                            page: serverPage,
+                            page_size: serverPageSize
+                        })
+                    });
+                    const result = await response.json();
+
+                    if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+                        activeView.rows = activeView.rows.concat(buildDetailTableRows(result.data));
+                        activeView.hasMore = result.has_more;
+                        activeView.totalCount = result.total_count;
+                    }
+                } catch (e) {
+                    console.error('获取更多数据失败:', e);
+                }
+            }
+
+            if (startIdx < activeView.rows.length) {
+                activeView.currentPage = nextPage;
+                renderChatTable(tableId, tableState);
+            }
+        }
+
+        function renderChatTable(tableId, tableState) {
+            const activeView = getActiveChatTableView(tableState);
+            const head = document.getElementById(tableId + '-head');
+            const tbody = document.getElementById(tableId + '-body');
+            const prevBtn = document.getElementById(tableId + '-prev');
+            const nextBtn = document.getElementById(tableId + '-next');
+            const pageInfo = document.getElementById(tableId + '-pageinfo');
+            const infoSpan = document.getElementById(tableId + '-info');
+            const pager = document.getElementById(tableId + '-pager');
+
+            if (!activeView || !head || !tbody) return;
+
+            const startIdx = (activeView.currentPage - 1) * activeView.pageSize;
+            const endIdx = Math.min(startIdx + activeView.pageSize, activeView.rows.length);
+            const pageRows = activeView.rows.slice(startIdx, endIdx);
+            const totalCount = activeView.totalCount || activeView.rows.length;
+            const totalPages = Math.max(1, Math.ceil(totalCount / activeView.pageSize));
+            const showPager = totalPages > 1 || activeView.hasMore;
+
+            head.innerHTML = activeView.headers
+                .map(h => `<th class="px-3 py-2 text-left font-medium text-gray-700">${escapeHtml(h)}</th>`)
+                .join('');
+            tbody.innerHTML = buildChatTableRowsHtml(activeView.headers, pageRows);
+
+            if (pageInfo) {
+                pageInfo.textContent = `第 ${activeView.currentPage} / ${activeView.hasMore ? '?' : totalPages} 页`;
+            }
+            if (prevBtn) prevBtn.disabled = activeView.currentPage <= 1;
+            if (nextBtn) nextBtn.disabled = !activeView.hasMore && activeView.currentPage >= totalPages;
+            if (infoSpan) {
+                const visibleStart = activeView.rows.length ? startIdx + 1 : 0;
+                infoSpan.textContent = `显示 ${visibleStart}-${endIdx} 条，共 ${totalCount} 条记录`;
+            }
+            if (pager) {
+                pager.style.display = showPager ? '' : 'none';
+            }
+
+            updateChatTableToggleButtons(tableId, tableState);
+        }
+
+        function addLoadingMessage() {
+            const container = document.getElementById('chatContainer');
+            const id = 'loading-' + Date.now();
+            
+            const html = `
+                <div class="flex items-start space-x-3" id="${id}">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-r from-green-400 to-blue-500 flex items-center justify-center text-white font-bold">AI</div>
+                    <div class="message-ai rounded-2xl rounded-tl-none px-4 py-3">
+                        <div class="flex items-center space-x-2">
+                            <div class="loading-spinner"></div>
+                            <span class="text-gray-600">思考中...</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            container.insertAdjacentHTML('beforeend', html);
+            container.scrollTop = container.scrollHeight;
+            return id;
+        }
+
+        // 移除消息
+        function removeMessage(id) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }
+
+        // 显示步骤
+        function showSteps(steps) {
+            const section = document.getElementById('stepsSection');
+            if (section) {
+                section.style.display = 'none';
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            inlineChartInstances.forEach((_, chartId) => {
+                resizeInlineChart(chartId);
+            });
+            if (fullscreenChart) {
+                try {
+                    fullscreenChart.resize();
+                } catch (error) {
+                    console.warn('resize fullscreen chart failed', error);
+                }
+            }
+        });
+
+        window.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                closeChartModal();
+            }
+        });
+
+        async function quickQuery() {
+            const deviceCode = document.getElementById('deviceCode').value.trim();
+            const dataType = document.getElementById('dataType').value;
+            const startDate = document.getElementById('startDate').value;
+            const endDate = document.getElementById('endDate').value;
+            const pageSize = parseInt(document.getElementById('pageSize').value);
+
+            if (!deviceCode || !startDate || !endDate) {
+                alert('请填写完整的查询条件');
+                return;
+            }
+
+            currentQueryParams = {
+                device_codes: [deviceCode],
+                start_time: startDate,
+                end_time: endDate,
+                data_type: dataType,
+                page_size: pageSize
+            };
+            currentPage = 1;
+
+            await loadTableData();
+        }
+
+        // 加载表格数据
+        async function loadTableData() {
+            if (!currentQueryParams) return;
+            
+            // 防止重复请求
+            if (isLoadingTable) {
+                console.log('⚠️ 正在加载中，跳过重复请求');
+                return;
+            }
+            
+            isLoadingTable = true;
+            console.log(`📊 开始加载第 ${currentPage} 页数据...`);
+
+            const section = document.getElementById('tableSection');
+            section.style.display = 'block';
+            
+            // 恢复传感器数据表头
+            const thead = document.querySelector('#quickTableHead tr');
+            if (thead) {
+                thead.innerHTML = `
+                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">时间</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">设备</th>
+                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">标签</th>
+                    <th class="px-4 py-3 text-right text-sm font-semibold text-gray-600">数值</th>
+                `;
+            }
+            document.getElementById('paginationSection').style.display = 'flex';
+            
+            // 禁用分页按钮
+            document.getElementById('prevBtn').disabled = true;
+            document.getElementById('nextBtn').disabled = true;
+
+            try {
+                const response = await fetch(API_BASE + '/api/query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        ...currentQueryParams,
+                        page: currentPage
+                    })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    tableData = data.data || [];
+                    console.log(`✅ 第 ${currentPage} 页加载成功，${tableData.length} 条记录`);
+                    if (tableData.length > 0) {
+                        console.log(`   第一条: ${tableData[0].time} - ${tableData[0].value}`);
+                        console.log(`   最后一条: ${tableData[tableData.length-1].time} - ${tableData[tableData.length-1].value}`);
+                    }
+                    renderTable(tableData);
+                    updatePagination(data);
+                    updateStats(data.statistics);
+                } else {
+                    alert('查询失败：' + (data.error || '未知错误'));
+                }
+            } catch (error) {
+                console.error('❌ 加载失败:', error);
+                alert('网络错误');
+            } finally {
+                isLoadingTable = false;
+            }
+        }
+
+        // 渲染表格
+        function renderTable(data) {
+            const tbody = document.getElementById('tableBody');
+            
+            // 清空旧数据（防止重复）
+            tbody.innerHTML = '';
+            
+            if (data.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="4" class="px-4 py-8 text-center text-gray-500">暂无数据</td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = data.map(row => {
+                const device = row.device && row.device !== '-' ? escapeHtml(row.device) : '<span class="text-gray-400">-</span>';
+                const tag = row.tag && row.tag !== '-' ? `<span class="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">${escapeHtml(row.tag)}</span>` : '<span class="text-gray-400">-</span>';
+                
+                return `
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-3 text-sm text-gray-800">${escapeHtml(row.time || '-')}</td>
+                        <td class="px-4 py-3 text-sm text-gray-600">${device}</td>
+                        <td class="px-4 py-3 text-sm">${tag}</td>
+                        <td class="px-4 py-3 text-sm text-right font-mono text-gray-800">${row.value !== undefined && row.value !== '' ? row.value : '-'}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // 更新分页
+        function updatePagination(data) {
+            document.getElementById('currentPage').textContent = data.page || 1;
+            document.getElementById('totalPages').textContent = data.total_pages || 1;
+            document.getElementById('totalCount').textContent = data.total_count || 0;
+            
+            document.getElementById('prevBtn').disabled = (data.page || 1) <= 1;
+            document.getElementById('nextBtn').disabled = !data.has_more;
+            
+            document.getElementById('tableInfo').textContent = 
+                data.is_sampled ? '(数据已降采样)' : '';
+        }
+
+        // 更新统计
+        function updateStats(stats) {
+            const section = document.getElementById('statsSection');
+            if (stats) {
+                section.style.display = 'block';
+                document.getElementById('statMin').textContent = stats.min?.toFixed(2) || '-';
+                document.getElementById('statMax').textContent = stats.max?.toFixed(2) || '-';
+                document.getElementById('statAvg').textContent = stats.avg?.toFixed(2) || '-';
+            } else {
+                section.style.display = 'none';
+            }
+        }
+
+        // 上一页
+        function prevPage() {
+            if (currentPage > 1 && !isLoadingTable) {
+                currentPage--;
+                console.log(`⬅️ 翻到上一页: ${currentPage}`);
+                loadTableData();
+            }
+        }
+
+        // 下一页
+        function nextPage() {
+            if (!isLoadingTable) {
+                currentPage++;
+                console.log(`➡️ 翻到下一页: ${currentPage}`);
+                loadTableData();
+            }
+        }
+
+        // 导出数据
+        function exportData() {
+            if (tableData.length === 0) {
+                alert('没有数据可导出');
+                return;
+            }
+
+            const csv = [
+                ['时间', '设备', '标签', '数值'].join(','),
+                ...tableData.map(row => [
+                    row.time || '',
+                    row.device || '',
+                    row.tag || '',
+                    row.value || ''
+                ].join(','))
+            ].join('\n');
+
+            const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `data_export_${new Date().toISOString().slice(0,10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // HTML 转义
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

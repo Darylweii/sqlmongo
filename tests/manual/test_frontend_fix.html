@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>前端分页修复测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        h2 { color: #666; margin-top: 0; }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        .btn-primary:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .log {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .log-entry {
+            padding: 4px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .log-warning { color: #ff9800; }
+        .log-success { color: #4caf50; }
+        .log-error { color: #f44336; }
+        .log-info { color: #2196f3; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .stat-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 前端分页修复测试</h1>
+    
+    <div class="test-section">
+        <h2>测试说明</h2>
+        <p>这个页面用于测试前端分页的防重复请求机制。</p>
+        <ul>
+            <li><strong>测试 1</strong>: 快速点击"下一页"按钮，观察是否会发送重复请求</li>
+            <li><strong>测试 2</strong>: 在请求进行中点击按钮，观察按钮是否被正确禁用</li>
+            <li><strong>测试 3</strong>: 查看日志，确认重复请求被拦截</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>模拟分页控制</h2>
+        <div>
+            <button class="btn-primary" onclick="prevPage()" id="prevBtn">⬅️ 上一页</button>
+            <span id="pageInfo">第 1 页</span>
+            <button class="btn-primary" onclick="nextPage()" id="nextBtn">下一页 ➡️</button>
+        </div>
+        <div style="margin-top: 15px;">
+            <button class="btn-primary" onclick="rapidClick()">🚀 快速点击测试（10次）</button>
+            <button class="btn-primary" onclick="clearLog()">🗑️ 清空日志</button>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>统计信息</h2>
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="totalRequests">0</div>
+                <div class="stat-label">总请求数</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="blockedRequests">0</div>
+                <div class="stat-label">被拦截请求</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="successRequests">0</div>
+                <div class="stat-label">成功请求</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>请求日志</h2>
+        <div class="log" id="logContainer"></div>
+    </div>
+
+    <script>
+        // 模拟状态
+        let currentPage = 1;
+        let isLoadingTable = false;
+        let totalRequests = 0;
+        let blockedRequests = 0;
+        let successRequests = 0;
+
+        // 添加日志
+        function addLog(message, type = 'info') {
+            const container = document.getElementById('logContainer');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${time}] ${message}`;
+            container.appendChild(entry);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        // 更新统计
+        function updateStats() {
+            document.getElementById('totalRequests').textContent = totalRequests;
+            document.getElementById('blockedRequests').textContent = blockedRequests;
+            document.getElementById('successRequests').textContent = successRequests;
+        }
+
+        // 模拟加载数据
+        async function loadTableData() {
+            totalRequests++;
+            
+            // 防止重复请求
+            if (isLoadingTable) {
+                addLog(`⚠️ 正在加载中，跳过重复请求（页码: ${currentPage}）`, 'warning');
+                blockedRequests++;
+                updateStats();
+                return;
+            }
+
+            isLoadingTable = true;
+            addLog(`📊 开始加载第 ${currentPage} 页数据...`, 'info');
+
+            // 禁用按钮
+            document.getElementById('prevBtn').disabled = true;
+            document.getElementById('nextBtn').disabled = true;
+
+            try {
+                // 模拟网络延迟
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                addLog(`✅ 第 ${currentPage} 页加载成功`, 'success');
+                successRequests++;
+                
+                // 更新页码显示
+                document.getElementById('pageInfo').textContent = `第 ${currentPage} 页`;
+                
+                // 更新按钮状态
+                document.getElementById('prevBtn').disabled = currentPage <= 1;
+                document.getElementById('nextBtn').disabled = false;
+                
+            } catch (error) {
+                addLog(`❌ 加载失败: ${error}`, 'error');
+            } finally {
+                isLoadingTable = false;
+                updateStats();
+            }
+        }
+
+        // 上一页
+        function prevPage() {
+            if (currentPage > 1 && !isLoadingTable) {
+                currentPage--;
+                addLog(`⬅️ 翻到上一页: ${currentPage}`, 'info');
+                loadTableData();
+            }
+        }
+
+        // 下一页
+        function nextPage() {
+            if (!isLoadingTable) {
+                currentPage++;
+                addLog(`➡️ 翻到下一页: ${currentPage}`, 'info');
+                loadTableData();
+            }
+        }
+
+        // 快速点击测试
+        async function rapidClick() {
+            addLog('🚀 开始快速点击测试...', 'info');
+            for (let i = 0; i < 10; i++) {
+                nextPage();
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            addLog('🏁 快速点击测试完成', 'success');
+        }
+
+        // 清空日志
+        function clearLog() {
+            document.getElementById('logContainer').innerHTML = '';
+            totalRequests = 0;
+            blockedRequests = 0;
+            successRequests = 0;
+            currentPage = 1;
+            updateStats();
+            document.getElementById('pageInfo').textContent = '第 1 页';
+            addLog('🗑️ 日志已清空', 'info');
+        }
+
+        // 初始化
+        addLog('✨ 测试页面已加载', 'success');
+        addLog('💡 提示: 点击"快速点击测试"按钮，观察重复请求是否被拦截', 'info');
+    </script>
+</body>
+</html>

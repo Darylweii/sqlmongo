@@ -1,0 +1,80 @@
+# =================================================================
+# Core Database Configuration (sample values only)
+# =================================================================
+
+# MongoDB Configuration
+MONGODB_HOST=127.0.0.1
+MONGODB_PORT=27017
+MONGODB_USER=your_mongodb_user_here
+MONGODB_PASSWORD=your_mongodb_password_here
+MONGODB_DATABASE=your_mongodb_database_here
+MONGODB_AUTH_SOURCE=admin
+
+# MySQL Configuration
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_DATABASE=
+MYSQL_USER=your_mysql_user_here
+MYSQL_PASSWORD=your_mysql_password_here
+
+# Redis Cache Configuration
+REDIS_URL=redis://localhost:6379
+REDIS_ENABLED=true
+
+# =================================================================
+# LLM & Agent Configuration
+# =================================================================
+
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-3.5-turbo
+LLM_API_KEY=your_llm_api_key_here
+LLM_BASE_URL=
+
+MULTI_LLM_ENABLED=false
+MAIN_LLM_PROVIDER=openai
+MAIN_LLM_MODEL=qwen3-32b
+MAIN_LLM_API_KEY=your_main_llm_api_key_here
+MAIN_LLM_BASE_URL=
+CODER_LLM_PROVIDER=openai
+CODER_LLM_MODEL=qwen2.5-coder-7b
+CODER_LLM_API_KEY=your_coder_llm_api_key_here
+CODER_LLM_BASE_URL=
+
+ORCHESTRATOR_TYPE=dag
+USE_LLM_SQL=false
+
+# =================================================================
+# Logging
+# =================================================================
+LOG_LEVEL=INFO
+
+# =================================================================
+# Semantic Layer Configuration
+# =================================================================
+SEMANTIC_LAYER_ENABLED=true
+SEMANTIC_LAYER_CONFIG_PATH=config/semantic_layer.yaml
+VECTOR_STORE_TYPE=faiss
+FAISS_INDEX_PATH=data/semantic_layer.faiss
+MILVUS_HOST=localhost
+MILVUS_PORT=19530
+MILVUS_COLLECTION=semantic_layer
+
+DASHSCOPE_API_KEY=your_dashscope_api_key_here
+EMBEDDING_BASE_URL=http://127.0.0.1:8008/v1
+EMBEDDING_MODEL=text-embedding-v4
+EMBEDDING_DIMENSIONS=1024
+RERANK_BASE_URL=http://127.0.0.1:8012/v1
+RERANK_MODEL=gte-rerank-v2
+
+# =================================================================
+# Retrieval & Rerank Settings
+# =================================================================
+SIMILARITY_THRESHOLD=0.5
+TOP_K_RETRIEVAL=10
+TOP_N_RERANK=5
+
+# =================================================================
+# System Settings
+# =================================================================
+HOT_RELOAD_ENABLED=true
+HOT_RELOAD_INTERVAL=60

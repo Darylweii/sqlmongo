@@ -1,0 +1,38 @@
+[
+  {
+    "id": "9635dca88f0046a2b71a04bbe93d8f3b",
+    "action": "create",
+    "actor": "system",
+    "timestamp": "2026-03-27T15:55:47.098003",
+    "rule_id": "3be71fec39b041dbb627546ab072cd14",
+    "canonical_term": "空调",
+    "scope_type": "system",
+    "scope_value": "global",
+    "status": "enabled",
+    "source": "bootstrap"
+  },
+  {
+    "id": "db2fa35e75224857bf58573b1cddaa0d",
+    "action": "create",
+    "actor": "system",
+    "timestamp": "2026-03-27T15:55:47.098032",
+    "rule_id": "fe62480e73e04a8483c347354e700c64",
+    "canonical_term": "火锅店",
+    "scope_type": "project",
+    "scope_value": "智慧物联网能效平台",
+    "status": "enabled",
+    "source": "bootstrap"
+  },
+  {
+    "id": "268344407e614fd4ae0a23a625d8e730",
+    "action": "create",
+    "actor": "S001",
+    "timestamp": "2026-03-27T15:55:47.098036",
+    "rule_id": "7b09f060f9f643c49d2a015de1477a73",
+    "canonical_term": "冷气",
+    "scope_type": "user",
+    "scope_value": "S001",
+    "status": "enabled",
+    "source": "bootstrap"
+  }
+]

@@ -1,0 +1,56 @@
+[
+  {
+    "id": "3be71fec39b041dbb627546ab072cd14",
+    "canonical_term": "空调",
+    "alias_terms": [
+      "冷气",
+      "制冷",
+      "冷风机"
+    ],
+    "entity_type": "device_type",
+    "target_value": "空调设备",
+    "scope_type": "system",
+    "scope_value": "global",
+    "priority": 90,
+    "status": "enabled",
+    "notes": "系统默认将冷气归一化到空调设备",
+    "created_by": "system",
+    "created_at": "2026-03-27T15:55:47.098003",
+    "updated_at": "2026-03-27T15:55:47.098025"
+  },
+  {
+    "id": "fe62480e73e04a8483c347354e700c64",
+    "canonical_term": "火锅店",
+    "alias_terms": [
+      "百年渝府火锅店",
+      "渝府火锅"
+    ],
+    "entity_type": "device",
+    "target_value": "a1_b5",
+    "scope_type": "project",
+    "scope_value": "智慧物联网能效平台",
+    "priority": 95,
+    "status": "enabled",
+    "notes": "项目专属店铺别名",
+    "created_by": "system",
+    "created_at": "2026-03-27T15:55:47.098032",
+    "updated_at": "2026-03-27T15:55:47.098032"
+  },
+  {
+    "id": "7b09f060f9f643c49d2a015de1477a73",
+    "canonical_term": "冷气",
+    "alias_terms": [
+      "空调"
+    ],
+    "entity_type": "preference",
+    "target_value": "空调",
+    "scope_type": "user",
+    "scope_value": "S001",
+    "priority": 100,
+    "status": "enabled",
+    "notes": "用户个人偏好叫法",
+    "created_by": "S001",
+    "created_at": "2026-03-27T15:55:47.098036",
+    "updated_at": "2026-03-27T15:55:47.098036"
+  }
+]

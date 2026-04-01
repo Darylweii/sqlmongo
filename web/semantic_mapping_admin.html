@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>&#x5E38;&#x7528;&#x53EB;&#x6CD5;&#x7BA1;&#x7406;</title>
+  <style>
+    :root{--bg:#f3f6fb;--card:#fff;--line:#d8e0ef;--text:#1f2a44;--muted:#64748b;--primary:#2563eb;--primary2:#dbeafe;--ok:#065f46;--okbg:#d1fae5;--warn:#92400e;--warnbg:#fef3c7;--danger:#b91c1c}
+    *{box-sizing:border-box}body{margin:0;font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif;background:linear-gradient(180deg,#f8fbff,#eef3fb);color:var(--text)}
+    .wrap{max-width:1440px;margin:0 auto;padding:24px}.hero,.card{background:rgba(255,255,255,.96);border:1px solid var(--line);border-radius:20px;box-shadow:0 12px 36px rgba(15,23,42,.08)}
+    .hero{padding:24px;margin-bottom:18px}.hero h1{margin:0 0 8px;font-size:30px}.hero p{margin:0;color:var(--muted)}
+    .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:18px}.stat{padding:18px;border-radius:18px;background:#f8fbff;border:1px solid var(--line)}.stat .label{color:var(--muted);font-size:13px}.stat .value{margin-top:8px;font-size:28px;font-weight:700}
+    .layout{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}.card{padding:20px}.head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}.head h2{margin:0;font-size:20px}.muted{color:var(--muted)}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}.field{display:grid;gap:8px}.field label{font-size:13px;color:var(--muted)}input,select{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:#fff;color:var(--text);outline:none}
+    input:focus,select:focus{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(37,99,235,.12)}button{border:none;border-radius:12px;padding:10px 14px;font-weight:600;cursor:pointer}.btn-primary{background:var(--primary);color:#fff}.btn-light{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}.btn-danger{background:#fff;color:var(--danger);border:1px solid #fecaca}
+    table{width:100%;border-collapse:collapse}th,td{padding:12px 10px;border-bottom:1px solid #e8eef7;text-align:left;vertical-align:top}th{color:var(--muted);font-size:12px;background:#f8fbff}.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:16px}.badge{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;font-size:12px}.badge-ok{background:var(--okbg);color:var(--ok)}.badge-warn{background:var(--warnbg);color:var(--warn)}.badge-blue{background:var(--primary2);color:#1d4ed8}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}.empty{padding:18px;text-align:center;color:var(--muted)}.note{padding:12px 14px;border-radius:14px;background:#f8fbff;border:1px dashed #c8d6ee;color:var(--muted)}
+    .toast{position:fixed;right:18px;bottom:18px;background:#0f172a;color:#fff;padding:12px 14px;border-radius:14px;display:none;box-shadow:0 12px 36px rgba(15,23,42,.22)}.toast.show{display:block}
+    @media(max-width:1080px){.layout,.stats,.grid2{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <h1>&#x5E38;&#x7528;&#x53EB;&#x6CD5;&#x7BA1;&#x7406;</h1>
+      <p>&#x7BA1;&#x7406;&#x804A;&#x5929;&#x91CC;&#x5B66;&#x5230;&#x7684;&#x5E38;&#x7528;&#x53EB;&#x6CD5;&#xFF0C;&#x5E76;&#x67E5;&#x770B;&#x7CFB;&#x7EDF;&#x5185;&#x7F6E;&#x89C4;&#x5219;&#x3002;</p>
+      <div class="stats">
+        <div class="stat"><div class="label">&#x5F53;&#x524D;&#x7528;&#x6237;</div><div class="value" id="userIdCard">-</div></div>
+        <div class="stat"><div class="label">&#x6211;&#x7684;&#x5E38;&#x7528;&#x53EB;&#x6CD5;</div><div class="value" id="memoryCount">0</div></div>
+        <div class="stat"><div class="label">&#x7BA1;&#x7406;&#x5458;&#x89C4;&#x5219;</div><div class="value" id="ruleCount">0</div></div>
+        <div class="stat"><div class="label">&#x6700;&#x8FD1;&#x89C4;&#x5219;&#x53D8;&#x66F4;</div><div class="value" id="historyCount">0</div></div>
+      </div>
+    </div>
+    <div class="layout">
+      <div class="card">
+        <div class="head">
+          <div>
+            <h2>&#x6211;&#x7684;&#x5E38;&#x7528;&#x53EB;&#x6CD5;</h2>
+            <div class="muted">&#x804A;&#x5929;&#x91CC;&#x5B66;&#x5230;&#x7684;&#x957F;&#x671F;&#x8BB0;&#x5FC6;&#x4F1A;&#x4FDD;&#x5B58;&#x5728;&#x8FD9;&#x91CC;&#xFF0C;&#x53EF;&#x76F4;&#x63A5;&#x65B0;&#x589E;&#x3001;&#x4FEE;&#x6539;&#x3001;&#x5220;&#x9664;&#x3002;</div>
+          </div>
+          <div class="actions">
+            <button class="btn-light" id="refreshMemoryBtn">&#x5237;&#x65B0;</button>
+            <button class="btn-light" id="resetFormBtn">&#x65B0;&#x5EFA;</button>
+          </div>
+        </div>
+        <div class="grid2" style="margin-bottom:16px">
+          <div class="field"><label>&#x6211;&#x8BF4;&#x6CD5;</label><input id="aliasText" placeholder="&#x4F8B;&#x5982;&#xFF1A;&#x51B7;&#x6C14;" /></div>
+          <div class="field"><label>&#x7CFB;&#x7EDF;&#x7406;&#x89E3;</label><input id="canonicalText" placeholder="&#x4F8B;&#x5982;&#xFF1A;&#x7A7A;&#x8C03;" /></div>
+          <div class="field"><label>&#x751F;&#x6548;&#x8303;&#x56F4;</label><select id="scopeType"><option value="global">&#x6240;&#x6709;&#x9879;&#x76EE;</option><option value="project">&#x4EC5;&#x5F53;&#x524D;&#x9879;&#x76EE;</option></select></div>
+          <div class="field" id="scopeValueWrap" style="display:none"><label>&#x9879;&#x76EE;&#x540D;&#x79F0;</label><input id="scopeValue" placeholder="&#x4F8B;&#x5982;&#xFF1A;&#x667A;&#x6167;&#x7269;&#x8054;&#x7F51;&#x80FD;&#x6548;&#x5E73;&#x53F0;" /></div>
+        </div>
+        <div class="actions" style="margin-bottom:16px"><button class="btn-primary" id="saveMemoryBtn">&#x4FDD;&#x5B58;&#x5E38;&#x7528;&#x53EB;&#x6CD5;</button><div class="muted" id="editingHint">&#x5F53;&#x524D;&#x4E3A;&#x65B0;&#x5EFA;&#x6A21;&#x5F0F;</div></div>
+        <div class="table-wrap"><table><thead><tr><th>&#x6211;&#x8BF4;&#x6CD5;</th><th>&#x7CFB;&#x7EDF;&#x7406;&#x89E3;</th><th>&#x751F;&#x6548;&#x8303;&#x56F4;</th><th>&#x6765;&#x6E90;</th><th>&#x66F4;&#x65B0;&#x65F6;&#x95F4;</th><th>&#x64CD;&#x4F5C;</th></tr></thead><tbody id="memoryTbody"><tr><td colspan="6" class="empty">&#x52A0;&#x8F7D;&#x4E2D;...</td></tr></tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="head">
+          <div><h2>&#x7BA1;&#x7406;&#x5458;&#x89C4;&#x5219;</h2><div class="muted">&#x7CFB;&#x7EDF;&#x5185;&#x7F6E;&#x6216;&#x7BA1;&#x7406;&#x5458;&#x7EF4;&#x62A4;&#x7684;&#x6807;&#x51C6;&#x89C4;&#x5219;&#xFF0C;&#x5F53;&#x524D;&#x9875;&#x9762;&#x9ED8;&#x8BA4;&#x53EA;&#x8BFB;&#x5C55;&#x793A;&#x3002;</div></div>
+          <button class="btn-light" id="refreshRuleBtn">&#x5237;&#x65B0;</button>
+        </div>
+        <div class="note" style="margin-bottom:16px">&#x5F53;&#x201C;&#x6211;&#x7684;&#x5E38;&#x7528;&#x53EB;&#x6CD5;&#x201D;&#x548C;&#x7BA1;&#x7406;&#x5458;&#x89C4;&#x5219;&#x51B2;&#x7A81;&#x65F6;&#xFF0C;&#x5F53;&#x524D;&#x7528;&#x6237;&#x7684;&#x957F;&#x671F;&#x8BB0;&#x5FC6;&#x4F1A;&#x4F18;&#x5148;&#x3002;</div>
+        <div class="table-wrap" style="max-height:420px"><table><thead><tr><th>&#x6807;&#x51C6;&#x53EB;&#x6CD5;</th><th>&#x5E38;&#x89C1;&#x8BF4;&#x6CD5;</th><th>&#x6307;&#x5411;</th><th>&#x8303;&#x56F4;</th><th>&#x72B6;&#x6001;</th></tr></thead><tbody id="ruleTbody"><tr><td colspan="5" class="empty">&#x52A0;&#x8F7D;&#x4E2D;...</td></tr></tbody></table></div>
+        <div class="head" style="margin-top:18px"><div><h2 style="font-size:18px">&#x6700;&#x8FD1;&#x89C4;&#x5219;&#x53D8;&#x66F4;</h2><div class="muted">&#x65B9;&#x4FBF;&#x6838;&#x5BF9;&#x7BA1;&#x7406;&#x5458;&#x89C4;&#x5219;&#x662F;&#x5426;&#x8FD1;&#x671F;&#x53D8;&#x66F4;&#x3002;</div></div></div>
+        <div id="historyBox" class="note">&#x52A0;&#x8F7D;&#x4E2D;...</div>
+      </div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+  <script>
+    const API_BASE = 'http://localhost:8080';
+    const CHAT_USER_STORAGE_KEY = 'sqlmongo2_chat_user_id';
+    const DEFAULT_CHAT_USER_ID = 'anonymous-user';
+    let editingMemoryId = null;
+    let memoryIndex = [];
+    function $(id) { return document.getElementById(id); }
+    function esc(value) { return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch] || ch)); }
+    function toast(message, isError = false) { const el = $('toast'); el.textContent = message; el.style.background = isError ? '#7f1d1d' : '#0f172a'; el.classList.add('show'); window.clearTimeout(window.__toastTimer); window.__toastTimer = window.setTimeout(() => el.classList.remove('show'), 2200); }
+    function normalizeUserId(userId) {
+      const value = String(userId || '').trim();
+      if (!value) return DEFAULT_CHAT_USER_ID;
+      if (/^user-[0-9a-f-]+$/i.test(value)) return DEFAULT_CHAT_USER_ID;
+      return value;
+    }
+    function getUserId() {
+      try {
+        const stored = window.localStorage.getItem(CHAT_USER_STORAGE_KEY);
+        const normalized = normalizeUserId(stored);
+        window.localStorage.setItem(CHAT_USER_STORAGE_KEY, normalized);
+        return normalized;
+      } catch (error) {
+        console.warn('read user id failed', error);
+      }
+      return DEFAULT_CHAT_USER_ID;
+    }
+    function scopeLabel(item) { return item.scope_label || (item.scope_type === 'project' ? `仅当前项目（${item.scope_value || '-'}）` : '所有项目'); }
+    async function api(path, options = {}) { const response = await fetch(API_BASE + path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } }); const data = await response.json(); if (!response.ok || data.success === false) throw new Error(data.error || data.message || `HTTP ${response.status}`); return data; }
+    function resetForm() { editingMemoryId = null; $('aliasText').value = ''; $('canonicalText').value = ''; $('scopeType').value = 'global'; $('scopeValue').value = ''; $('scopeValueWrap').style.display = 'none'; $('editingHint').textContent = '当前为新建模式'; }
+    function fillMemoryForm(item) { editingMemoryId = item.id; $('aliasText').value = item.alias_text || ''; $('canonicalText').value = item.canonical_text || ''; $('scopeType').value = item.scope_type || 'global'; $('scopeValue').value = item.scope_type === 'project' ? (item.scope_value || '') : ''; $('scopeValueWrap').style.display = item.scope_type === 'project' ? 'block' : 'none'; $('editingHint').textContent = `正在编辑：${item.alias_text || '-'} = ${item.canonical_text || '-'}`; }
+    function editMemoryById(memoryId) { const item = memoryIndex.find((entry) => Number(entry.id) === Number(memoryId)); if (item) fillMemoryForm(item); }
+    function renderMemories(items) { memoryIndex = Array.isArray(items) ? items : []; $('memoryCount').textContent = String(memoryIndex.length || 0); $('memoryTbody').innerHTML = memoryIndex.length ? memoryIndex.map((item) => `<tr><td>${esc(item.alias_text || '-')}</td><td>${esc(item.canonical_text || '-')}</td><td><span class="badge badge-blue">${esc(scopeLabel(item))}</span></td><td>${esc(item.source || '-')}</td><td>${esc(item.updated_at || item.created_at || '-')}</td><td><div class="actions"><button class="btn-light" onclick="editMemoryById(${Number(item.id || 0)})">编辑</button><button class="btn-danger" onclick="deleteMemory(${Number(item.id || 0)})">删除</button></div></td></tr>`).join('') : '<tr><td colspan="6" class="empty">当前还没有长期记忆</td></tr>'; }
+    function renderRules(rules) { $('ruleCount').textContent = String(rules.length || 0); $('ruleTbody').innerHTML = rules.length ? rules.map((rule) => `<tr><td>${esc(rule.canonical_term || '-')}</td><td>${esc((rule.alias_terms || []).join('?') || '-')}</td><td>${esc(rule.target_value || '-')}</td><td>${esc(rule.scope_type === 'project' ? `项目：${rule.scope_value || '-'}` : rule.scope_type === 'user' ? `用户：${rule.scope_value || '-'}` : '系统全局')}</td><td><span class="badge ${String(rule.status || '').toLowerCase() === 'enabled' ? 'badge-ok' : 'badge-warn'}">${esc(rule.status || '-')}</span></td></tr>`).join('') : '<tr><td colspan="5" class="empty">暂无管理员规则</td></tr>'; }
+    function renderHistory(items) { $('historyCount').textContent = String(items.length || 0); $('historyBox').innerHTML = items.length ? items.map((item) => `<div style="padding:8px 0;border-bottom:1px solid #e5ebf5"><div><b>${esc(item.action || '-')}</b> ? ${esc(item.canonical_term || '-')}</div><div class="muted">${esc(item.timestamp || '-')} ? ${esc(item.actor || '-')}</div></div>`).join('') : '暂无历史记录'; }
+    async function loadMemories() { const userId = getUserId(); $('userIdCard').textContent = userId; const data = await api(`/api/memory/alias?user_id=${encodeURIComponent(userId)}`); renderMemories(Array.isArray(data.items) ? data.items : []); }
+    async function loadRules() { const data = await api('/api/semantic-rules?status=enabled'); renderRules(Array.isArray(data.rules) ? data.rules : []); }
+    async function loadHistory() { const data = await api('/api/semantic-rules/history?limit=10'); renderHistory(Array.isArray(data.history) ? data.history : []); }
+    async function saveMemory() { const userId = getUserId(); const aliasText = $('aliasText').value.trim(); const canonicalText = $('canonicalText').value.trim(); const scopeType = $('scopeType').value; const scopeValue = $('scopeValue').value.trim(); if (!aliasText || !canonicalText) { toast('请先填写“我说法”和“系统理解”', true); return; } if (scopeType === 'project' && !scopeValue) { toast('选择“仅当前项目”时，请填写项目名称', true); return; } const body = { alias_text: aliasText, canonical_text: canonicalText, scope_type: scopeType, scope_value: scopeType === 'project' ? scopeValue : 'global', user_id: userId }; if (editingMemoryId) { await api(`/api/memory/alias/${editingMemoryId}`, { method: 'PUT', body: JSON.stringify(body) }); toast('已更新常用叫法'); } else { await api('/api/memory/alias', { method: 'POST', body: JSON.stringify(body) }); toast('已新增常用叫法'); } resetForm(); await loadMemories(); }
+    async function deleteMemory(memoryId) { if (!window.confirm('确认删除这条常用叫法？')) return; await api(`/api/memory/alias?memory_id=${encodeURIComponent(memoryId)}&user_id=${encodeURIComponent(getUserId())}`, { method: 'DELETE' }); toast('已删除常用叫法'); if (editingMemoryId === memoryId) resetForm(); await loadMemories(); }
+    $('scopeType').addEventListener('change', () => { const isProject = $('scopeType').value === 'project'; $('scopeValueWrap').style.display = isProject ? 'block' : 'none'; if (!isProject) $('scopeValue').value = ''; });
+    $('saveMemoryBtn').addEventListener('click', saveMemory); $('resetFormBtn').addEventListener('click', resetForm); $('refreshMemoryBtn').addEventListener('click', loadMemories); $('refreshRuleBtn').addEventListener('click', async () => { await Promise.all([loadRules(), loadHistory()]); });
+    Promise.all([loadMemories(), loadRules(), loadHistory()]).then(resetForm).catch((error) => toast(error.message, true));
+  </script>
+</body>
+</html>

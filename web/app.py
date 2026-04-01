@@ -35,6 +35,10 @@ from src.router.collection_router import get_collection_prefix, get_target_colle
 from pymongo import MongoClient
 import httpx
 from langchain_openai import ChatOpenAI
+from src.semantic_rules import SemanticRuleStore
+from src.user_memory_store import UserMemoryStore
+from src.chat_memory_service import ChatMemoryService
+from src.memory_rewrite import parse_memory_rewrite_json
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +56,7 @@ EMPTY_RESULT_MESSAGE = "当前时间范围内未查询到符合条件的数据�
 ANSWER_STREAM_CHUNK_SIZE = max(6, int(os.getenv("ANSWER_STREAM_CHUNK_SIZE", "12")))
 ANSWER_STREAM_CHUNK_DELAY_MS = max(0, int(os.getenv("ANSWER_STREAM_CHUNK_DELAY_MS", "16")))
 ANSWER_STREAM_PUNCTUATION = set("\uFF0C\u3002\uFF1F\uFF01\uFF1B\uFF1A,.!?;:\n")
+RESOLVED_SCOPE_CARD_ITEM_LIMIT = max(1, int(os.getenv("RESOLVED_SCOPE_CARD_ITEM_LIMIT", "20")))
 
 
 def _iter_answer_delta_chunks(text: str, chunk_size: int = ANSWER_STREAM_CHUNK_SIZE):
@@ -224,6 +229,55 @@ def _resolve_alias_to_project_device(alias: str, project_hint: str) -> Optional[
     if len(top_rows) == 1:
         return top_rows[0]
     return None
+
+
+def _infer_data_type_from_context(message: str, query_info: Optional[dict]) -> str:
+    context = query_info or {}
+    plan_context = context.get("query_plan_context") if isinstance(context, dict) else {}
+    if not isinstance(plan_context, dict):
+        plan_context = {}
+
+    requested_tags = [str(tag).lower() for tag in (plan_context.get("requested_tags") or []) if str(tag).strip()]
+    single_phase_tags = {"ua", "ub", "uc", "ia", "ib", "ic"}
+    if len(requested_tags) == 1 and requested_tags[0] in single_phase_tags:
+        return requested_tags[0]
+
+    data_type = str(plan_context.get("data_type") or "").strip().lower()
+    if data_type:
+        return data_type
+
+    normalized = str(message or "").lower()
+    if any(keyword in normalized for keyword in ["ua", "ub", "uc", "电压"]):
+        return "u_line"
+    if any(keyword in normalized for keyword in ["ia", "ib", "ic", "电流"]):
+        return "i"
+    if any(keyword in normalized for keyword in ["功率", "p"]):
+        return "p"
+    return "ep"
+
+
+def _extract_device_search_keywords_from_message(message: str) -> List[str]:
+    normalized = str(message or "").strip()
+    if not normalized:
+        return []
+
+    keywords: List[str] = []
+    explicit_codes = re.findall(r"[A-Za-z]+\d+_[A-Za-z]+\d+", normalized)
+    for code in explicit_codes:
+        if code not in keywords:
+            keywords.append(code)
+
+    cleaned = normalized
+    for token in ["搜索", "查询", "查一下", "查一查", "查找", "列出", "有哪些", "有啥", "什么", "设备", "列表", "信息"]:
+        cleaned = cleaned.replace(token, " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if cleaned and cleaned not in keywords:
+        keywords.append(cleaned)
+
+    if "b9" in normalized.lower() and "b9" not in keywords:
+        keywords.append("b9")
+
+    return keywords[:3]
 
 
 @lru_cache(maxsize=512)
@@ -591,6 +645,28 @@ def _normalize_scope_value(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
 
+def _finalize_resolved_scope_payload(
+    *,
+    title: str,
+    items: List[dict],
+    tg_count: int,
+    aggregation_scope_codes: Optional[List[str]] = None,
+) -> dict:
+    normalized_items = list(items or [])
+    normalized_aggregation_scope_codes = list(aggregation_scope_codes or [])
+    device_count = len(normalized_items)
+    suppressed = device_count > RESOLVED_SCOPE_CARD_ITEM_LIMIT
+    return {
+        "title": title,
+        "items": [] if suppressed else normalized_items,
+        "device_count": device_count,
+        "tg_count": tg_count,
+        "aggregation_scope_codes": normalized_aggregation_scope_codes,
+        "scope_card_suppressed": suppressed,
+        "scope_card_item_limit": RESOLVED_SCOPE_CARD_ITEM_LIMIT,
+    }
+
+
 def _build_resolved_scope(
     query_params: Optional[dict],
     alias_memory: Optional[Dict[str, Any]] = None,
@@ -643,13 +719,12 @@ def _build_resolved_scope(
                 str(item.get("project_name") or item.get("project_code_name") or ""),
                 str(item.get("tg") or ""),
             ))
-            return {
-                "title": "\u5f53\u524d\u786e\u8ba4\u4f5c\u7528\u57df",
-                "items": items,
-                "device_count": len(items),
-                "tg_count": len({str(item.get("tg") or "").strip() for item in items if str(item.get("tg") or "").strip()}),
-                "aggregation_scope_codes": [],
-            }
+            return _finalize_resolved_scope_payload(
+                title="\u5f53\u524d\u786e\u8ba4\u4f5c\u7528\u57df",
+                items=items,
+                tg_count=len({str(item.get("tg") or "").strip() for item in items if str(item.get("tg") or "").strip()}),
+                aggregation_scope_codes=[],
+            )
 
     device_lookup = {_normalize_scope_value(code) for code in device_codes}
     device_index = {_normalize_scope_value(code): code for code in device_codes}
@@ -778,13 +853,12 @@ def _build_resolved_scope(
         })
         if project_scope_count > 1 and allows_explicit_multi_scope_aggregation(scope_user_query, device_code):
             aggregation_scope_codes.append(device_code)
-    return {
-        "title": "\u5f53\u524d\u786e\u8ba4\u4f5c\u7528\u57df",
-        "items": items,
-        "device_count": len(items),
-        "tg_count": len({str(item.get("tg") or "").strip() for item in items if str(item.get("tg") or "").strip()}),
-        "aggregation_scope_codes": aggregation_scope_codes,
-    }
+    return _finalize_resolved_scope_payload(
+        title="\u5f53\u524d\u786e\u8ba4\u4f5c\u7528\u57df",
+        items=items,
+        tg_count=len({str(item.get("tg") or "").strip() for item in items if str(item.get("tg") or "").strip()}),
+        aggregation_scope_codes=aggregation_scope_codes,
+    )
 
 
 def _build_message_with_history(message: str, history: Optional[List[dict]]) -> str:
@@ -1161,6 +1235,77 @@ llm = ChatOpenAI(
     request_timeout=300.0,  # 添加请求超时设置
 )
 
+
+def _coerce_llm_text_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if isinstance(item, dict):
+                text_value = item.get("text") or item.get("content") or ""
+                if text_value:
+                    parts.append(str(text_value))
+        return "\n".join(part for part in parts if part).strip()
+    return str(content or "").strip()
+
+
+def _rewrite_memory_command_with_llm(message: str) -> Optional[Dict[str, Any]]:
+    content = str(message or "").strip()
+    if not content:
+        return None
+    prompt = (
+        "You rewrite a Chinese memory command for an energy-data assistant.\n"
+        "Return JSON only: {\"alias_text\": string, \"target_text\": string, \"confidence\": string, \"source\": \"llm\"}.\n"
+        "Rules:\n"
+        "1. Remove instruction wrappers and keep only the normalized alias -> canonical target mapping.\n"
+        "2. alias_text is what the user says later. target_text is the canonical meaning.\n"
+        "3. If one side is a device code like a1_b9 and the other side is a human-friendly name, use the human-friendly name as alias_text and the device code as target_text.\n"
+        "4. If the message is not a memory command or you cannot determine a reliable mapping, return {}.\n"
+        "Examples:\n"
+        "Input: \u628a\u51b7\u6c14\u8bb0\u6210\u7a7a\u8c03\n"
+        "Output: {\"alias_text\": \"\u51b7\u6c14\", \"target_text\": \"\u7a7a\u8c03\", \"confidence\": \"high\", \"source\": \"llm\"}\n"
+        "Input: \u8bf7\u8bb0\u4f4f\u4ee5\u540ea1_b9\u4ee3\u8868\u4e00\u53f7\u8bbe\u5907\n"
+        "Output: {\"alias_text\": \"\u4e00\u53f7\u8bbe\u5907\", \"target_text\": \"a1_b9\", \"confidence\": \"high\", \"source\": \"llm\"}\n"
+        "Input: \u5e2e\u6211\u8bb0\u4e00\u4e0b\u7814\u53d1\u52a8\u529b\u8868\u5176\u5b9e\u5c31\u662f\u4e03\u5c42\u52a8\u529b\u8868\n"
+        "Output: {\"alias_text\": \"\u7814\u53d1\u52a8\u529b\u8868\", \"target_text\": \"\u4e03\u5c42\u52a8\u529b\u8868\", \"confidence\": \"medium\", \"source\": \"llm\"}\n"
+        f"Input: {content}"
+    )
+    try:
+        response = llm.invoke(prompt)
+        payload = parse_memory_rewrite_json(_coerce_llm_text_content(getattr(response, "content", response)))
+    except Exception as exc:
+        logger.warning("memory.rewrite.llm.failed message=%s error=%s", _short_text(content, 80), exc)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    alias_text = str(payload.get("alias_text") or "").strip()
+    target_text = str(payload.get("target_text") or "").strip()
+    if not alias_text or not target_text:
+        return None
+    confidence = str(payload.get("confidence") or "medium").strip().lower() or "medium"
+    return {
+        "alias_text": alias_text,
+        "target_text": target_text,
+        "confidence": confidence,
+        "source": str(payload.get("source") or "llm").strip() or "llm",
+    }
+
+semantic_rule_store = SemanticRuleStore()
+user_memory_store = UserMemoryStore()
+chat_memory_service = ChatMemoryService(
+    memory_store=user_memory_store,
+    semantic_rule_store=semantic_rule_store,
+    normalize_alias_key=_normalize_alias_key,
+    lookup_device_by_code=_lookup_device_by_code,
+    build_device_snapshot=_build_device_snapshot,
+    logger=logger,
+    llm_memory_rewrite=_rewrite_memory_command_with_llm,
+)
+
 app = FastAPI(title="AI Data Router Agent", version="1.0.0")
 
 # CORS
@@ -1177,7 +1322,28 @@ class ChatRequest(BaseModel):
     message: str
     history: Optional[List[dict]] = None  # 对话历史
     session_id: Optional[str] = None
+    user_id: Optional[str] = None
     alias_confirmation: Optional[dict] = None
+
+
+class MemoryAliasCreateRequest(BaseModel):
+    alias_text: str
+    canonical_text: str
+    scope_type: str = "global"
+    scope_value: Optional[str] = None
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
+    source: Optional[str] = "user_setting"
+
+
+class MemoryAliasUpdateRequest(BaseModel):
+    alias_text: Optional[str] = None
+    canonical_text: Optional[str] = None
+    scope_type: Optional[str] = None
+    scope_value: Optional[str] = None
+    status: Optional[str] = None
+    user_id: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class DataQueryRequest(BaseModel):
@@ -1188,17 +1354,114 @@ class DataQueryRequest(BaseModel):
     data_type: str = "ep"
     page: int = 1
     page_size: int = 50
-    user_query: str = ""  # 用户原始查询
-    query_plan: Optional[dict] = None  # QueryPlan 结构化结果
+    user_query: str = ""  # 原始用户问题
+    query_plan: Optional[dict] = None  # QueryPlan 原始结构
     comparison_scope_groups: Optional[dict] = None
-    value_filter: Optional[dict] = None  # 数值过滤条件 {"gt": 100} 或 {"lt": 50}
+    value_filter: Optional[dict] = None  # 原始用户问题 {"gt": 100} / {"lt": 50}
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    """返回前端页面"""
+    """返回聊天首页"""
     with open("web/index.html", "r", encoding="utf-8") as f:
         return f.read()
+
+
+@app.get("/semantic-mapping", response_class=HTMLResponse)
+async def semantic_mapping_admin():
+    """返回语义映射管理页"""
+    with open("web/semantic_mapping_admin.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+
+@app.get("/api/memory/alias")
+async def list_memory_aliases(user_id: str = "", session_id: str = "", keyword: str = "", canonical_text: str = "", scope_type: str = "", status: str = "enabled", limit: int = 100):
+    request_id = uuid4().hex
+    resolved_user_id = chat_memory_service.resolve_chat_user_id(user_id, session_id)
+    items = [chat_memory_service.memory_view(item) for item in user_memory_store.list_alias_memories(user_id=resolved_user_id, keyword=keyword, canonical_text=canonical_text, scope_type=scope_type, status=status, limit=limit)]
+    return _build_success_payload(request_id=request_id, user_id=resolved_user_id, items=items, total=len(items))
+
+
+@app.post("/api/memory/alias")
+async def create_memory_alias(request: MemoryAliasCreateRequest):
+    request_id = uuid4().hex
+    session_id = _get_or_create_session_id(request.session_id)
+    user_id = chat_memory_service.resolve_chat_user_id(request.user_id, session_id)
+    target = chat_memory_service.validate_memory_target(request.canonical_text)
+    stored = user_memory_store.upsert_alias_memory(
+        user_id=user_id,
+        alias_text=request.alias_text,
+        canonical_text=target.get("canonical_text"),
+        target_type=target.get("target_type"),
+        target_value=target.get("target_value"),
+        scope_type=request.scope_type,
+        scope_value=request.scope_value or ("global" if request.scope_type == "global" else ""),
+        source=str(request.source or "user_setting"),
+    )
+    return _build_success_payload(request_id=request_id, user_id=user_id, item=chat_memory_service.memory_view(stored))
+
+
+@app.put("/api/memory/alias/{memory_id}")
+async def update_memory_alias(memory_id: int, request: MemoryAliasUpdateRequest):
+    request_id = uuid4().hex
+    session_id = _get_or_create_session_id(request.session_id)
+    user_id = chat_memory_service.resolve_chat_user_id(request.user_id, session_id)
+    updated = user_memory_store.update_alias_memory(
+        memory_id=memory_id,
+        user_id=user_id,
+        alias_text=request.alias_text,
+        canonical_text=request.canonical_text,
+        scope_type=request.scope_type,
+        scope_value=request.scope_value,
+        status=request.status,
+    )
+    return _build_success_payload(request_id=request_id, user_id=user_id, item=chat_memory_service.memory_view(updated))
+
+
+@app.delete("/api/memory/alias")
+async def delete_memory_alias(memory_id: int, user_id: str = "", session_id: str = ""):
+    request_id = uuid4().hex
+    resolved_user_id = chat_memory_service.resolve_chat_user_id(user_id, session_id)
+    deleted = user_memory_store.delete_alias_memory(memory_id=memory_id, user_id=resolved_user_id)
+    return _build_success_payload(request_id=request_id, user_id=resolved_user_id, item=chat_memory_service.memory_view(deleted))
+
+
+@app.get("/api/chat/history")
+async def get_chat_history(session_id: str = "", user_id: str = "", limit: int = 50):
+    request_id = uuid4().hex
+    resolved_session_id = str(session_id or "").strip() or None
+    resolved_user_id = str(user_id or "").strip() or None
+    items = user_memory_store.list_chat_history(session_id=resolved_session_id, user_id=resolved_user_id, limit=limit)
+    return _build_success_payload(request_id=request_id, session_id=resolved_session_id, user_id=resolved_user_id, items=items, total=len(items))
+
+
+@app.get("/api/chat/sessions")
+async def get_chat_sessions(user_id: str = "", session_id: str = "", limit: int = 50):
+    request_id = uuid4().hex
+    resolved_user_id = chat_memory_service.resolve_chat_user_id(user_id, session_id)
+    items = user_memory_store.list_chat_sessions(user_id=resolved_user_id, limit=limit)
+    return _build_success_payload(request_id=request_id, user_id=resolved_user_id, items=items, total=len(items))
+
+
+@app.get("/api/semantic-rules")
+async def list_semantic_rules(keyword: str = "", scope_type: str = "", entity_type: str = "", status: str = "", scope_value: str = ""):
+    request_id = uuid4().hex
+    rules = semantic_rule_store.list_rules(keyword=keyword, scope_type=scope_type, entity_type=entity_type, status=status, scope_value=scope_value)
+    summary = {
+        "total": len(rules),
+        "enabled": sum(1 for rule in rules if str(rule.get("status") or "").lower() == "enabled"),
+        "system": sum(1 for rule in rules if str(rule.get("scope_type") or "").lower() == "system"),
+        "project": sum(1 for rule in rules if str(rule.get("scope_type") or "").lower() == "project"),
+        "user": sum(1 for rule in rules if str(rule.get("scope_type") or "").lower() == "user"),
+    }
+    return _build_success_payload(request_id=request_id, rules=rules, summary=summary)
+
+
+@app.get("/api/semantic-rules/history")
+async def semantic_rules_history(limit: int = 20):
+    request_id = uuid4().hex
+    history = semantic_rule_store.history(limit=limit)
+    return _build_success_payload(request_id=request_id, history=history)
 
 
 @app.post("/api/chat/stream")
@@ -1213,10 +1476,24 @@ async def chat_stream(request: ChatRequest):
         effective_message = context["effective_message"]
         alias_memory = context["alias_memory"]
         learned_aliases = context["learned_aliases"]
+        user_id = chat_memory_service.resolve_chat_user_id(request.user_id, session_id)
+        intent_type = chat_memory_service.classify_chat_intent(request.message)
+        memory_action_result = None
+        memory_suggestion = None
+        memory_effect_payload = None
+        chat_memory_service.record_chat_message(
+            session_id=session_id,
+            user_id=user_id,
+            role="user",
+            message=request.message,
+            intent_type=intent_type,
+        )
         _log_structured(
             "chat.stream.request",
             request_id=request_id,
             session_id=session_id,
+            user_id=user_id,
+            intent_type=intent_type,
             history_count=len(history),
             history_used=min(len(history), CHAT_HISTORY_LIMIT),
             current_question=_short_text(effective_message),
@@ -1225,8 +1502,71 @@ async def chat_stream(request: ChatRequest):
         )
 
         try:
-            agent = _create_chat_agent(alias_memory=alias_memory)
+            handled = chat_memory_service.handle_memory_command(
+                request_id=request_id,
+                session_id=session_id,
+                user_id=user_id,
+                message=request.message,
+                alias_memory=alias_memory,
+                alias_confirmation=request.alias_confirmation,
+            )
+            if handled:
+                memory_action_result = handled.get("memory_action_result")
+                follow_up = memory_action_result.get("follow_up") if isinstance(memory_action_result, dict) else None
+                if isinstance(follow_up, dict):
+                    effective_message = chat_memory_service.apply_query_once_alias(
+                        {
+                            "action": "query_once",
+                            "alias_text": follow_up.get("alias_text"),
+                            "canonical_text": follow_up.get("canonical_text"),
+                            "original_question": follow_up.get("original_question"),
+                        },
+                        follow_up.get("original_question") or effective_message,
+                    )
+                    intent_type = "data_query"
+                else:
+                    chat_memory_service.record_chat_message(
+                        session_id=session_id,
+                        user_id=user_id,
+                        role="assistant",
+                        message=handled.get("response") or "",
+                        intent_type="memory_command",
+                        message_meta={
+                            "response": handled.get("response") or "",
+                            "intent_type": handled.get("intent_type") or "memory_command",
+                            "memory_action_result": handled.get("memory_action_result"),
+                            "resolved_scope": handled.get("resolved_scope"),
+                            "query_params": handled.get("query_params"),
+                            "projects": handled.get("projects"),
+                            "devices": handled.get("devices"),
+                            "clarification_required": handled.get("clarification_required", False),
+                            "clarification_candidates": handled.get("clarification_candidates"),
+                        },
+                    )
+                    complete_payload = {
+                        "type": "complete",
+                        **handled,
+                        "session_id": session_id,
+                        "original_question": effective_message,
+                        "intent_type": handled.get("intent_type") or intent_type,
+                    }
+                    yield f"data: {json.dumps(complete_payload, ensure_ascii=False)}\n\n"
+                    return
 
+            effective_message = chat_memory_service.apply_query_once_alias(request.alias_confirmation, effective_message)
+            memory_apply = chat_memory_service.apply_user_memories(
+                effective_message,
+                user_id=user_id,
+                alias_memory=alias_memory,
+            )
+            effective_message = memory_apply.get("effective_message") or effective_message
+            alias_memory = memory_apply.get("alias_memory") or alias_memory
+            memory_effect_payload = chat_memory_service.build_memory_effect_payload(
+                memory_apply.get("applied_items") or [],
+                memory_apply.get("invalid_items") or [],
+            )
+
+            agent = _create_chat_agent(alias_memory=alias_memory)
             message_with_history = _build_message_with_history(effective_message, history)
 
             for event in agent.run_with_progress(message_with_history):
@@ -1267,8 +1607,9 @@ async def chat_stream(request: ChatRequest):
                     response_text = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()
                     analysis = event.get("analysis") or {}
                     chart_specs = event.get("chart_specs") or []
+                    query_params = event.get("query_params")
                     resolved_scope = _build_resolved_scope(
-                        event.get("query_params"),
+                        query_params,
                         alias_memory=alias_memory,
                         learned_aliases=learned_aliases,
                     )
@@ -1276,9 +1617,11 @@ async def chat_stream(request: ChatRequest):
                         "chat.stream.final",
                         request_id=request_id,
                         session_id=session_id,
+                        user_id=user_id,
+                        intent_type=intent_type,
                         show_table=event.get("show_table", False),
                         table_type=event.get("table_type", ""),
-                        query_params=event.get("query_params"),
+                        query_params=query_params,
                         resolved_scope_count=len((resolved_scope or {}).get("items") or []),
                         analysis_mode=analysis.get("mode") if isinstance(analysis, dict) else None,
                         chart_count=len(chart_specs) if isinstance(chart_specs, list) else 0,
@@ -1296,7 +1639,6 @@ async def chat_stream(request: ChatRequest):
                         if ANSWER_STREAM_CHUNK_DELAY_MS > 0:
                             await asyncio.sleep(ANSWER_STREAM_CHUNK_DELAY_MS / 1000)
 
-                    query_params = event.get("query_params")
                     table_type = event.get("table_type", "")
                     projects = event.get("projects")
                     project_stats = event.get("project_stats")
@@ -1320,6 +1662,14 @@ async def chat_stream(request: ChatRequest):
                         except Exception as exc:
                             logger.warning("chat.stream.project_stats_fallback.failed request_id=%s error=%s", request_id, exc)
 
+                    clarification_required = bool(event.get("clarification_required", False))
+                    memory_suggestion = chat_memory_service.build_memory_suggestion(
+                        request.message,
+                        user_id=user_id,
+                        alias_memory=alias_memory,
+                        query_params=query_params,
+                        clarification_required=clarification_required,
+                    )
                     final_data = {
                         "type": "complete",
                         "success": True,
@@ -1327,6 +1677,7 @@ async def chat_stream(request: ChatRequest):
                         "response": response_text,
                         "original_question": effective_message,
                         "session_id": session_id,
+                        "intent_type": intent_type,
                         "show_table": event.get("show_table", False),
                         "table_type": table_type,
                         "projects": projects,
@@ -1339,9 +1690,39 @@ async def chat_stream(request: ChatRequest):
                         "table_preview": event.get("table_preview"),
                         "total_duration_ms": event.get("total_duration_ms"),
                         "show_charts": event.get("show_charts", False),
-                        "clarification_required": event.get("clarification_required", False),
+                        "clarification_required": clarification_required,
                         "clarification_candidates": event.get("clarification_candidates"),
+                        "memory_action_result": memory_action_result or memory_effect_payload,
+                        "memory_suggestion": memory_suggestion,
                     }
+                    chat_memory_service.record_chat_message(
+                        session_id=session_id,
+                        user_id=user_id,
+                        role="assistant",
+                        message=response_text,
+                        intent_type=intent_type,
+                        message_meta={
+                            "response": response_text,
+                            "original_question": effective_message,
+                            "intent_type": intent_type,
+                            "show_table": event.get("show_table", False),
+                            "table_type": table_type,
+                            "projects": projects,
+                            "project_stats": project_stats,
+                            "devices": devices,
+                            "query_params": query_params,
+                            "resolved_scope": resolved_scope,
+                            "analysis": event.get("analysis"),
+                            "chart_specs": event.get("chart_specs"),
+                            "table_preview": event.get("table_preview"),
+                            "total_duration_ms": event.get("total_duration_ms"),
+                            "show_charts": event.get("show_charts", False),
+                            "clarification_required": clarification_required,
+                            "clarification_candidates": event.get("clarification_candidates"),
+                            "memory_action_result": memory_action_result or memory_effect_payload,
+                            "memory_suggestion": memory_suggestion,
+                        },
+                    )
                     yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
 
         except Exception as e:
@@ -1379,10 +1760,23 @@ async def chat(request: ChatRequest):
     effective_message = context["effective_message"]
     alias_memory = context["alias_memory"]
     learned_aliases = context["learned_aliases"]
+    user_id = chat_memory_service.resolve_chat_user_id(request.user_id, session_id)
+    intent_type = chat_memory_service.classify_chat_intent(request.message)
+    memory_action_result = None
+    memory_suggestion = None
+    chat_memory_service.record_chat_message(
+        session_id=session_id,
+        user_id=user_id,
+        role="user",
+        message=request.message,
+        intent_type=intent_type,
+    )
     _log_structured(
         "chat.request",
         request_id=request_id,
         session_id=session_id,
+        user_id=user_id,
+        intent_type=intent_type,
         history_count=len(history),
         history_used=min(len(history), CHAT_HISTORY_LIMIT),
         current_question=_short_text(effective_message),
@@ -1391,6 +1785,58 @@ async def chat(request: ChatRequest):
     )
 
     try:
+        handled = chat_memory_service.handle_memory_command(
+            request_id=request_id,
+            session_id=session_id,
+            user_id=user_id,
+            message=request.message,
+            alias_memory=alias_memory,
+            alias_confirmation=request.alias_confirmation,
+        )
+        if handled:
+            memory_action_result = handled.get("memory_action_result")
+            follow_up = memory_action_result.get("follow_up") if isinstance(memory_action_result, dict) else None
+            if isinstance(follow_up, dict):
+                effective_message = chat_memory_service.apply_query_once_alias(
+                    {
+                        "action": "query_once",
+                        "alias_text": follow_up.get("alias_text"),
+                        "canonical_text": follow_up.get("canonical_text"),
+                        "original_question": follow_up.get("original_question"),
+                    },
+                    follow_up.get("original_question") or effective_message,
+                )
+                intent_type = "data_query"
+            else:
+                chat_memory_service.record_chat_message(
+                    session_id=session_id,
+                    user_id=user_id,
+                    role="assistant",
+                    message=handled.get("response") or "",
+                    intent_type="memory_command",
+                )
+                return {
+                    **handled,
+                    "session_id": session_id,
+                    "original_question": effective_message,
+                    "intent_type": handled.get("intent_type") or intent_type,
+                }
+
+        effective_message = chat_memory_service.apply_query_once_alias(request.alias_confirmation, effective_message)
+        memory_apply = chat_memory_service.apply_user_memories(
+            effective_message,
+            user_id=user_id,
+            alias_memory=alias_memory,
+        )
+        effective_message = memory_apply.get("effective_message") or effective_message
+        alias_memory = memory_apply.get("alias_memory") or alias_memory
+        memory_effect_payload = chat_memory_service.build_memory_effect_payload(
+            memory_apply.get("applied_items") or [],
+            memory_apply.get("invalid_items") or [],
+        )
+        if memory_action_result is None:
+            memory_action_result = memory_effect_payload
+
         agent = _create_chat_agent(alias_memory=alias_memory)
 
         steps = []
@@ -1400,6 +1846,7 @@ async def chat(request: ChatRequest):
         projects_list = None
         devices_list = None
         final_analysis = None
+        final_table_type = ""
         total_duration_ms = None
         clarification_required = False
         clarification_candidates = None
@@ -1422,28 +1869,24 @@ async def chat(request: ChatRequest):
                         s["info"] = event.get("info", "")
                         if event.get("duration_ms") is not None:
                             s["duration_ms"] = event.get("duration_ms")
-                        if event.get("query_info"):
-                            s["query_info"] = event["query_info"]
-                            if "获取时序数据" in event["step"]:
-                                last_sensor_result = event.get("query_info")
-
-                        if "列出项目" in event["step"]:
-                            try:
-                                projects_list = metadata_engine.list_projects()
-                            except Exception as e:
-                                logger.warning("chat.projects_fetch.failed request_id=%s error=%s", request_id, e)
-
-                        if "搜索设备" in event["step"]:
-                            info = event.get("info", "")
-                            if "找到" in info and "设备" in info:
-                                query_info = event.get("query_info")
-                                if query_info and isinstance(query_info, list):
-                                    devices_list = query_info[:50]
+                        query_info = event.get("query_info")
+                        if query_info:
+                            s["query_info"] = query_info
+                            if isinstance(query_info, dict):
+                                if query_info.get("query"):
+                                    last_sensor_result = query_info
+                                project_rows = query_info.get("projects")
+                                if isinstance(project_rows, list):
+                                    projects_list = project_rows
+                                device_rows = query_info.get("devices")
+                                if isinstance(device_rows, list):
+                                    devices_list = device_rows[:50]
 
             elif event_type == "final_answer":
                 response_text = event.get("response", "")
                 response_text = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()
                 final_analysis = event.get("analysis")
+                final_table_type = str(event.get("table_type") or final_table_type or "")
                 total_duration_ms = event.get("total_duration_ms")
                 clarification_required = bool(event.get("clarification_required", False))
                 clarification_candidates = event.get("clarification_candidates")
@@ -1464,28 +1907,16 @@ async def chat(request: ChatRequest):
             mongo_query = last_sensor_result["query"]
             device_codes = mongo_query.get("device", {}).get("$in", [])
             log_time = mongo_query.get("logTime", {})
-            collections = last_sensor_result.get("collections", [])
-            data_type = "ep"
-            if collections:
-                coll_name = collections[0]
-                if coll_name.startswith("source_data_"):
-                    parts = coll_name[len("source_data_"):].split("_")
-                    if len(parts) == 1 and parts[0].isdigit():
-                        data_type = "ep"
-                    elif parts:
-                        if parts[-1].isdigit() and len(parts[-1]) == 6:
-                            data_type = "_".join(parts[:-1]) if len(parts) > 1 else "ep"
-                        else:
-                            data_type = "_".join(parts)
-
             start_time_str = log_time.get("$gte", "")
             end_time_str = log_time.get("$lte", "")
-            tg_values = []
+            data_type = _infer_data_type_from_context(request.message, last_sensor_result)
+
             tg_query = mongo_query.get("tg")
+            tg_values = []
             if isinstance(tg_query, dict):
-                tg_values = list(tg_query.get("$in", []) or [])
+                tg_values = [str(value) for value in tg_query.get("$in", []) if str(value).strip()]
             elif isinstance(tg_query, list):
-                tg_values = list(tg_query)
+                tg_values = [str(value) for value in tg_query if str(value).strip()]
             elif tg_query not in (None, ""):
                 tg_values = [str(tg_query)]
 
@@ -1505,45 +1936,47 @@ async def chat(request: ChatRequest):
                 learned_aliases=learned_aliases,
             )
 
-        table_keywords = ["表格", "列表", "详细", "查看前端", "已在表格中", "可查看", "分页查看"]
-        if any(keyword in response_text for keyword in table_keywords):
-            if any(word in response_text for word in ["项目", "project"]):
+        table_keywords = ["表格", "下表", "列表", "记录", "结果"]
+        if final_table_type in {"projects", "project_stats", "devices"} or any(keyword in response_text for keyword in table_keywords):
+            if final_table_type == "projects" or any(word in response_text for word in ["项目", "project"]):
                 if not projects_list:
                     try:
                         projects_list = metadata_engine.list_projects()
                     except Exception as e:
                         logger.warning("chat.project_list_fallback.failed request_id=%s error=%s", request_id, e)
 
-            if any(word in response_text for word in ["设备", "device", "电梯"]):
+            if final_table_type == "devices" or any(word in response_text for word in ["设备", "device"]):
                 if not devices_list:
                     try:
-                        search_keywords = []
-                        user_msg = request.message.lower()
-                        if "电梯" in user_msg:
-                            search_keywords.append("电梯")
-                        elif "b9" in user_msg:
-                            search_keywords.append("b9")
-                        elif "北京电力" in user_msg:
-                            search_keywords.append("北京电力")
-
+                        search_keywords = _extract_device_search_keywords_from_message(request.message)
                         if search_keywords:
                             from src.tools.device_tool import find_device_metadata_with_engine
 
-                            for keyword in search_keywords[:1]:
+                            for keyword in search_keywords:
                                 devices_result = find_device_metadata_with_engine(keyword, metadata_engine)
                                 if devices_result and isinstance(devices_result, list):
                                     devices_list = [
                                         d for d in devices_result
                                         if "_query_info" not in d and "error" not in d
                                     ][:50]
-                                    break
+                                    if devices_list:
+                                        break
                     except Exception as e:
                         logger.warning("chat.device_list_fallback.failed request_id=%s error=%s", request_id, e)
 
+        memory_suggestion = chat_memory_service.build_memory_suggestion(
+            request.message,
+            user_id=user_id,
+            alias_memory=alias_memory,
+            query_params=query_params,
+            clarification_required=clarification_required,
+        )
         _log_structured(
             "chat.final",
             request_id=request_id,
             session_id=session_id,
+            user_id=user_id,
+            intent_type=intent_type,
             query_params=query_params,
             resolved_scope_count=len((resolved_scope or {}).get("items") or []),
             project_count=len(projects_list or []),
@@ -1554,6 +1987,28 @@ async def chat(request: ChatRequest):
             response_preview=_short_text(response_text),
             total_duration_ms=total_duration_ms,
             empty_result=response_text == EMPTY_RESULT_MESSAGE,
+        )
+        chat_memory_service.record_chat_message(
+            session_id=session_id,
+            user_id=user_id,
+            role="assistant",
+            message=response_text,
+            intent_type=intent_type,
+            message_meta={
+                "response": response_text,
+                "original_question": effective_message,
+                "intent_type": intent_type,
+                "query_params": query_params,
+                "resolved_scope": resolved_scope,
+                "projects": projects_list,
+                "devices": devices_list,
+                "analysis": final_analysis,
+                "total_duration_ms": total_duration_ms,
+                "clarification_required": clarification_required,
+                "clarification_candidates": clarification_candidates,
+                "memory_action_result": memory_action_result,
+                "memory_suggestion": memory_suggestion,
+            },
         )
         return {
             "success": True,
@@ -1569,6 +2024,9 @@ async def chat(request: ChatRequest):
             "clarification_required": clarification_required,
             "clarification_candidates": clarification_candidates,
             "request_id": request_id,
+            "intent_type": intent_type,
+            "memory_action_result": memory_action_result,
+            "memory_suggestion": memory_suggestion,
         }
 
     except Exception as e:

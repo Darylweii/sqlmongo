@@ -37,6 +37,11 @@ class DeviceInfo:
     score: float = 0.0
     matched_fields: List[str] = field(default_factory=list)
     match_reason: Optional[str] = None
+    retrieval_source: str = "lexical"
+    confidence_level: Optional[str] = None
+    decision_mode: Optional[str] = None
+    is_recommended: bool = False
+    recommendation_rank: Optional[int] = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -51,6 +56,11 @@ class DeviceInfo:
             "match_score": round(float(self.score or 0.0), 2),
             "matched_fields": list(self.matched_fields or []),
             "match_reason": self.match_reason,
+            "retrieval_source": self.retrieval_source,
+            "confidence_level": self.confidence_level,
+            "decision_mode": self.decision_mode,
+            "is_recommended": bool(self.is_recommended),
+            "recommendation_rank": self.recommendation_rank,
         }
 
 
@@ -105,14 +115,100 @@ class MetadataEngine:
     def _normalize_match_text(self, value: Optional[str]) -> str:
         if value is None:
             return ""
-        return re.sub(r"\s+", " ", str(value).strip()).lower()
+        text = str(value).strip().lower()
+        text = text.replace("（", "(").replace("）", ")")
+        text = re.sub(r"[_\-/#()]+", " ", text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    def _compact_match_text(self, value: Optional[str]) -> str:
+        return re.sub(r"\s+", "", self._normalize_match_text(value))
+
+    def _replace_chinese_digits(self, value: str) -> str:
+        mapping = str.maketrans({
+            "零": "0", "一": "1", "二": "2", "两": "2", "三": "3", "四": "4",
+            "五": "5", "六": "6", "七": "7", "八": "8", "九": "9",
+        })
+        return str(value or "").translate(mapping)
+
+    def _replace_arabic_digits(self, value: str) -> str:
+        mapping = str.maketrans({
+            "0": "零", "1": "一", "2": "二", "3": "三", "4": "四",
+            "5": "五", "6": "六", "7": "七", "8": "八", "9": "九",
+        })
+        return str(value or "").translate(mapping)
 
     def _extract_match_tokens(self, value: str) -> List[str]:
         normalized = self._normalize_match_text(value)
-        return [token for token in re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]+", normalized) if token]
+        compact = self._compact_match_text(value)
+        tokens: List[str] = []
+        seen = set()
+
+        def add_token(token: str) -> None:
+            text = str(token or "").strip().lower()
+            if not text or text in seen:
+                return
+            seen.add(text)
+            tokens.append(text)
+
+        for token in re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]+", normalized):
+            add_token(token)
+            add_token(self._replace_chinese_digits(token))
+            add_token(self._replace_arabic_digits(token))
+            if re.fullmatch(r"[\u4e00-\u9fff]{2,12}", token):
+                for size in (2, 3):
+                    if len(token) < size:
+                        continue
+                    for index in range(0, len(token) - size + 1):
+                        add_token(token[index:index + size])
+
+        add_token(compact)
+        add_token(self._replace_chinese_digits(compact))
+        add_token(self._replace_arabic_digits(compact))
+        return tokens
+
+    def _load_device_catalog(self) -> List[DeviceInfo]:
+        if self._catalog_cache is not None:
+            return self._catalog_cache
+
+        session = self._get_session()
+        try:
+            query = text("""
+                SELECT
+                    d.device,
+                    d.device_name,
+                    d.device_type,
+                    d.project_id,
+                    d.tg,
+                    p.project_name,
+                    p.project_code_name
+                FROM device.device_info d
+                LEFT JOIN project.project_info p ON d.project_id = p.id
+            """)
+            result = session.execute(query)
+            catalog: List[DeviceInfo] = []
+            for row in result:
+                if not row.device:
+                    continue
+                catalog.append(
+                    DeviceInfo(
+                        device=row.device,
+                        name=row.device_name or "",
+                        device_type=row.device_type or "",
+                        project_id=str(row.project_id) if row.project_id else "",
+                        project_name=row.project_name,
+                        project_code_name=row.project_code_name,
+                        tg=getattr(row, "tg", None),
+                    )
+                )
+            self._catalog_cache = catalog
+            return catalog
+        finally:
+            session.close()
 
     def _score_device_match(self, keyword: str, device: DeviceInfo) -> Tuple[float, List[str], str]:
         normalized_keyword = self._normalize_match_text(keyword)
+        compact_keyword = self._compact_match_text(keyword)
         if not normalized_keyword:
             return 0.0, [], ""
 
@@ -123,6 +219,7 @@ class MetadataEngine:
             "project_name": device.project_name,
             "project_code_name": device.project_code_name,
             "device_type": device.device_type,
+            "tg": device.tg,
         }
         exact_weights = {
             "device": 120.0,
@@ -130,6 +227,7 @@ class MetadataEngine:
             "project_name": 72.0,
             "project_code_name": 64.0,
             "device_type": 36.0,
+            "tg": 42.0,
         }
         contains_weights = {
             "device": 96.0,
@@ -137,13 +235,15 @@ class MetadataEngine:
             "project_name": 58.0,
             "project_code_name": 52.0,
             "device_type": 24.0,
+            "tg": 30.0,
         }
         token_weights = {
             "device": 84.0,
-            "name": 72.0,
+            "name": 78.0,
             "project_name": 48.0,
             "project_code_name": 44.0,
             "device_type": 18.0,
+            "tg": 24.0,
         }
         field_labels = {
             "device": "设备代号",
@@ -151,6 +251,7 @@ class MetadataEngine:
             "project_name": "项目名称",
             "project_code_name": "项目代号",
             "device_type": "设备类型",
+            "tg": "TG",
         }
 
         score = 0.0
@@ -159,6 +260,7 @@ class MetadataEngine:
 
         for field_name, raw_value in fields.items():
             normalized_value = self._normalize_match_text(raw_value)
+            compact_value = self._compact_match_text(raw_value)
             if not normalized_value:
                 continue
 
@@ -167,12 +269,18 @@ class MetadataEngine:
             if normalized_value == normalized_keyword:
                 field_score = exact_weights[field_name]
                 field_reason = f"{field_labels[field_name]}精确匹配"
-            elif normalized_keyword in normalized_value:
+            elif compact_keyword and compact_keyword in compact_value:
                 field_score = contains_weights[field_name]
                 field_reason = f"{field_labels[field_name]}包含关键词"
-            elif tokens and all(token in normalized_value for token in tokens):
-                field_score = token_weights[field_name]
-                field_reason = f"{field_labels[field_name]}覆盖全部关键词"
+            elif tokens:
+                matched_tokens = [token for token in tokens if token and token in compact_value]
+                coverage = len(matched_tokens) / max(len(tokens), 1)
+                if coverage >= 0.78:
+                    field_score = token_weights[field_name]
+                    field_reason = f"{field_labels[field_name]}高覆盖关键词"
+                elif coverage >= 0.5:
+                    field_score = token_weights[field_name] * coverage
+                    field_reason = f"{field_labels[field_name]}命中部分关键词"
 
             if field_score <= 0:
                 continue
@@ -191,8 +299,7 @@ class MetadataEngine:
             score += min(18.0, 6.0 * (len(matched_fields) - 1))
 
         if score <= 0:
-            score = 10.0
-            reasons.append("SQL LIKE 模糊匹配")
+            return 0.0, [], ""
 
         return score, matched_fields, "；".join(dict.fromkeys(reasons))
 
@@ -220,67 +327,44 @@ class MetadataEngine:
             return cached["devices"], cached["sql"]
 
         try:
-            session = self._get_session()
-            try:
-                sql_template = """
-                    SELECT
-                        d.device,
-                        d.device_name,
-                        d.device_type,
-                        d.project_id,
-                        d.tg,
-                        p.project_name,
-                        p.project_code_name
-                    FROM device.device_info d
-                    LEFT JOIN project.project_info p ON d.project_id = p.id
-                    WHERE d.device_name LIKE :keyword
-                       OR d.device LIKE :keyword
-                       OR p.project_name LIKE :keyword
-                       OR p.project_code_name LIKE :keyword
-                """
+            catalog = self._load_device_catalog()
+            deduped: dict = {}
+            for catalog_device in catalog:
+                score, matched_fields, match_reason = self._score_device_match(keyword, catalog_device)
+                if score <= 0:
+                    continue
 
-                actual_sql = sql_template.replace(":keyword", f"'%{keyword}%'" ).strip()
-                query = text(sql_template)
-                result = session.execute(query, {"keyword": f"%{keyword}%"})
-
-                deduped: dict = {}
-                for row in result:
-                    if not row.device:
-                        continue
-
-                    device = DeviceInfo(
-                        device=row.device,
-                        name=row.device_name or "",
-                        device_type=row.device_type or "",
-                        project_id=str(row.project_id) if row.project_id else "",
-                        project_name=row.project_name,
-                        project_code_name=row.project_code_name,
-                    )
-                    score, matched_fields, match_reason = self._score_device_match(keyword, device)
-                    device.score = score
-                    device.matched_fields = matched_fields
-                    device.match_reason = match_reason
-
-                    dedupe_key = (device.device, device.project_id, device.name)
-                    existing = deduped.get(dedupe_key)
-                    if existing is None or device.score > existing.score:
-                        deduped[dedupe_key] = device
-
-                devices = sorted(
-                    deduped.values(),
-                    key=lambda item: (
-                        -float(item.score or 0.0),
-                        str(item.device or ""),
-                        str(item.name or ""),
-                        str(item.project_id or ""),
-                    ),
+                device = DeviceInfo(
+                    device=catalog_device.device,
+                    name=catalog_device.name,
+                    device_type=catalog_device.device_type,
+                    project_id=catalog_device.project_id,
+                    project_name=catalog_device.project_name,
+                    project_code_name=catalog_device.project_code_name,
+                    tg=catalog_device.tg,
+                    score=score,
+                    matched_fields=matched_fields,
+                    match_reason=match_reason,
+                    retrieval_source="lexical",
                 )
+                dedupe_key = (device.device, device.project_id, device.name, device.tg)
+                existing = deduped.get(dedupe_key)
+                if existing is None or device.score > existing.score:
+                    deduped[dedupe_key] = device
 
-                self._update_cache(self._search_cache, cache_key, {"devices": devices, "sql": actual_sql})
-                return devices, actual_sql
+            devices = sorted(
+                deduped.values(),
+                key=lambda item: (
+                    -float(item.score or 0.0),
+                    str(item.device or ""),
+                    str(item.name or ""),
+                    str(item.project_id or ""),
+                ),
+            )
 
-            finally:
-                session.close()
+            actual_sql = f"catalog_search:{keyword}"
+            self._update_cache(self._search_cache, cache_key, {"devices": devices, "sql": actual_sql})
+            return devices, actual_sql
 
         except SQLAlchemyError as e:
             logger.error(f"Database query failed: {e}")

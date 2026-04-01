@@ -41,6 +41,10 @@ TRAILING_DECISION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 TRAILING_GENERIC_PATTERN = re.compile(r"\s*(?:\u7684\u6570\u636e|\u60c5\u51b5|\u8d8b\u52bf|\u6ce2\u52a8|\u5206\u6790|\u5bf9\u6bd4|\u6bd4\u8f83|\u53d8\u5316|\u8bb0\u5f55|\u8d70\u52bf)$", re.IGNORECASE)
+TRAILING_LISTING_PATTERN = re.compile(
+    r"\s*(?:(?:\u8bbe\u5907|\u88c5\u7f6e)\s*)?(?:\u6709\u54ea\u4e9b|\u6709\u54ea\u4e00\u4e9b|\u6709\u4ec0\u4e48|\u6709\u4ec0\u9ebc|\u54ea\u4e9b|\u54ea\u4e00\u4e9b|\u4ec0\u4e48|\u4ec0\u9ebc|\u5217\u8868|\u6e05\u5355)\s*(?:\u8bbe\u5907|\u88c5\u7f6e)?\s*[\uff1f?]?$",
+    re.IGNORECASE,
+)
 CONTAINS_TARGET_PATTERN = re.compile(
     r"(?:\u8bbe\u5907\u540d\u79f0|\u8bbe\u5907\u540d|\u540d\u79f0|\u540d\u5b57|\u4ee3\u53f7|\u7f16\u7801|\u7f16\u53f7)?\s*(?:\u4e2d)?(?:\u5305\u542b|\u542b\u6709|\u5e26\u6709|\u91cc\u6709)\s*(?P<target>[A-Za-z0-9_#\-\u4e00-\u9fff]+)",
     re.IGNORECASE,
@@ -62,7 +66,7 @@ TIME_KEYWORDS = (
 PAGINATION_KEYWORDS = ("\u6bcf\u9875", "\u5206\u9875", "page_size", "page size", "\u7b2c1\u9875", "\u524d50\u6761", "50\u6761")
 DEVICE_LISTING_KEYWORDS = ("\u8bbe\u5907\u5217\u8868", "\u5217\u51fa\u8bbe\u5907", "\u5217\u4e00\u4e0b\u8bbe\u5907", "\u6709\u54ea\u4e9b\u8bbe\u5907", "\u641c\u7d22\u8bbe\u5907", "\u67e5\u627e\u8bbe\u5907", "\u5339\u914d\u8bbe\u5907")
 DEVICE_LISTING_PATTERN = re.compile(
-    r"(?:\u641c\u7d22|\u67e5\u627e|\u67e5\u8be2|\u5339\u914d|\u5217\u51fa|\u5217\u4e00\u4e0b|\u770b\u4e00\u4e0b|\u770b\u770b).{0,20}\u8bbe\u5907|"
+    r"(?:\u641c\u7d22|\u67e5\u627e|\u5339\u914d|\u5217\u51fa|\u5217\u4e00\u4e0b|\u770b\u4e00\u4e0b|\u770b\u770b).{0,20}\u8bbe\u5907(?:\u5217\u8868|\u6e05\u5355|\u7ed3\u679c)?$|"
     r"\u8bbe\u5907.{0,12}(?:\u5217\u8868|\u6e05\u5355|\u6709\u54ea\u4e9b|\u54ea\u4e9b|\u5339\u914d|\u641c\u7d22\u7ed3\u679c)",
     re.IGNORECASE,
 )
@@ -194,15 +198,22 @@ def parse_query_entities(user_query: str) -> ParsedQueryEntities:
     requested_metric_tags = extract_requested_metric_tags(current_question)
     inferred_data_type = _infer_data_type_from_requested_tags(requested_metric_tags) or _infer_data_type(compact_lower)
     has_time_reference = any(keyword in current_question for keyword in TIME_KEYWORDS) or bool(EXPLICIT_DATE_PATTERN.search(current_question))
-    has_sensor_intent = bool(inferred_data_type) or any(keyword in current_question for keyword in SENSOR_KEYWORDS) or has_time_reference
+    has_explicit_device_listing_intent = _has_explicit_device_listing_language(current_question, compact_lower)
+    project_scoped_device_hint = _extract_project_scoped_device_listing_hint(current_question)
+    has_metric_only_question = _is_metric_only_question(
+        current_question=current_question,
+        compact_lower=compact_lower,
+        explicit_device_codes=explicit_device_codes,
+        inferred_data_type=inferred_data_type,
+        has_time_reference=has_time_reference,
+    )
+    has_sensor_intent = (
+        bool(inferred_data_type) or any(keyword in current_question for keyword in SENSOR_KEYWORDS) or has_time_reference
+    ) and not has_explicit_device_listing_intent and not has_metric_only_question
     has_detect_data_types_intent = any(keyword in compact_lower for keyword in DETECT_DATA_TYPE_KEYWORDS)
     has_comparison_intent = len(explicit_device_codes) > 1 or any(keyword in compact_lower for keyword in COMPARISON_HINT_KEYWORDS)
     has_pagination_intent = any(keyword in current_question for keyword in PAGINATION_KEYWORDS)
-    project_scoped_device_hint = _extract_project_scoped_device_listing_hint(current_question)
-    has_device_listing_intent = (not has_sensor_intent) and (
-        _has_explicit_device_listing_language(current_question, compact_lower)
-        or bool(project_scoped_device_hint)
-    )
+    has_device_listing_intent = has_explicit_device_listing_intent or bool(project_scoped_device_hint)
     has_project_listing_intent = (not has_sensor_intent) and (not has_device_listing_intent) and ("\u9879\u76ee" in current_question) and any(keyword in compact_lower for keyword in PROJECT_LISTING_KEYWORDS)
     has_project_stats_intent = (not has_sensor_intent) and ("\u9879\u76ee" in current_question) and any(keyword in compact_lower for keyword in PROJECT_STATS_KEYWORDS)
     ranking_order, ranking_limit, ranking_granularity, has_ranked_point_intent = _extract_ranked_point_semantics(current_question, compact_lower)
@@ -406,6 +417,7 @@ def normalize_search_target(keyword: str) -> str:
     value = TRAILING_DETECT_PATTERN.sub("", value)
     value = TRAILING_DECISION_PATTERN.sub("", value)
     value = TRAILING_GENERIC_PATTERN.sub("", value)
+    value = TRAILING_LISTING_PATTERN.sub("", value)
     value = LEADING_CONTAINS_PATTERN.sub("", value)
     value = re.sub(r"^(?:\u5173\u4e8e|\u6709\u5173|\u9488\u5bf9)\s*", "", value)
     value = re.sub(r"^(?:\u8bbe\u5907|\u88c5\u7f6e)\s*", "", value)
@@ -424,7 +436,9 @@ def _has_explicit_device_listing_language(current_question: str, compact_lower: 
         return True
     if DEVICE_LISTING_PATTERN.search(current_question):
         return True
-    return any(token in compact_lower for token in ("\u54ea\u4e9b\u8bbe\u5907", "\u4ec0\u4e48\u8bbe\u5907", "\u6709\u54ea\u4e9b\u8bbe\u5907", "\u7535\u68af\u8bbe\u5907"))
+    if any(token in compact_lower for token in ("\u54ea\u4e9b\u8bbe\u5907", "\u4ec0\u4e48\u8bbe\u5907", "\u6709\u54ea\u4e9b\u8bbe\u5907", "\u7535\u68af\u8bbe\u5907")):
+        return True
+    return bool(re.search(r"(?:\u641c\u7d22|\u67e5\u627e|\u5339\u914d).{0,20}\u7684?\u8bbe\u5907$", current_question, re.IGNORECASE))
 
 
 def _extract_project_scoped_device_listing_hint(current_question: str) -> Optional[str]:
@@ -532,6 +546,40 @@ def _extract_search_targets(current_question: str, comparison_mode: bool, explic
     if fallback:
         return (fallback,)
     return ()
+
+
+def _is_metric_only_question(
+    *,
+    current_question: str,
+    compact_lower: str,
+    explicit_device_codes: Tuple[str, ...],
+    inferred_data_type: Optional[str],
+    has_time_reference: bool,
+) -> bool:
+    if not current_question or not inferred_data_type:
+        return False
+    if explicit_device_codes or has_time_reference:
+        return False
+    if any(keyword in compact_lower for keyword in COMPARISON_HINT_KEYWORDS):
+        return False
+    if _has_explicit_device_listing_language(current_question, compact_lower):
+        return False
+
+    normalized = str(current_question or "").lower().strip()
+    normalized = re.sub(r"^[\s,\uff0c;\uff1b:?\uff1a\uff1f\u3002/]+|[\s,\uff0c;\uff1b:?\uff1a\uff1f\u3002/]+$", "", normalized)
+    normalized = LEADING_VERB_PATTERN.sub("", normalized)
+    normalized = LEADING_LISTING_PATTERN.sub("", normalized)
+    normalized = re.sub(r"\s+", "", normalized)
+    if not normalized:
+        return False
+
+    metric_terms = set()
+    for _, synonyms in METRIC_SYNONYMS:
+        for synonym in synonyms:
+            metric_terms.add(re.sub(r"\s+", "", str(synonym or "").lower()))
+    for tag, _patterns in EXACT_METRIC_TAG_PATTERNS:
+        metric_terms.add(str(tag or "").strip().lower())
+    return normalized in metric_terms
 
 
 def _extract_project_hints(

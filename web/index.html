@@ -230,13 +230,42 @@
 <body class="bg-gray-100 min-h-screen">
     <div class="container mx-auto px-4 py-6">
         <!-- 标题 -->
-        <div class="text-center mb-6">
-            <h1 class="text-3xl font-bold text-gray-800">🤖 AI 数据查询助手</h1>
-            <p class="text-gray-600 mt-2">智能查询设备数据，支持自然语言交互</p>
+        <div class="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div class="text-center lg:text-left">
+                <h1 class="text-3xl font-bold text-gray-800">🤖 AI 数据查询助手</h1>
+                <p class="text-gray-600 mt-2">智能查询设备数据，支持自然语言交互</p>
+                <div class="mt-3 flex items-center justify-center lg:justify-start">
+                    <div class="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700">
+                        <span class="font-medium">当前用户</span>
+                        <code id="currentUserBadge" class="rounded bg-white px-2 py-0.5 text-xs text-indigo-800 border border-indigo-100">anonymous-user</code>
+                    </div>
+                </div>
+            </div>
+            <div class="flex items-center justify-center lg:justify-end gap-3">
+                <button onclick="openSemanticMappingAdmin()"
+                    class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition font-medium shadow">
+                    🧠 语义映射管理
+                </button>
+            </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
             <!-- 左侧：AI 对话 -->
+            <div class="space-y-6">
+                <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+                    <div class="p-4 border-b flex items-center justify-between gap-3">
+                        <div>
+                            <h3 class="text-lg font-semibold text-gray-800">🕘 历史对话</h3>
+                            <p class="text-xs text-gray-500 mt-1">可切换历史会话，也可新开一轮对话。</p>
+                        </div>
+                        <button onclick="startNewConversation()" class="px-3 py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-700 text-sm font-medium">新开对话</button>
+                    </div>
+                    <div class="max-h-[calc(100vh-240px)] overflow-y-auto divide-y divide-gray-100" id="conversationList">
+                        <div class="p-4 text-sm text-gray-500">加载中...</div>
+                    </div>
+                </div>
+            </div>
+
             <div class="lg:col-span-2">
                 <div class="bg-white rounded-xl shadow-lg overflow-hidden">
                     <!-- 对话区域 -->
@@ -389,6 +418,22 @@
 
                 <!-- 执行步骤 -->
 
+                <div class="bg-white rounded-xl shadow-lg p-4 border border-indigo-100">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <h3 class="text-lg font-semibold text-gray-800 mb-1">🧠 语义映射管理</h3>
+                            <p class="text-sm text-gray-600">查看、测试并维护关键词到设备/项目的语义映射规则。</p>
+                        </div>
+                    </div>
+                    <div class="mt-4 space-y-2">
+                        <button onclick="openSemanticMappingAdmin()"
+                            class="w-full bg-indigo-600 text-white py-2.5 rounded-lg hover:bg-indigo-700 transition font-medium">
+                            打开语义映射页
+                        </button>
+                        <p class="text-xs text-gray-500">会打开后端管理页，可直接增删改查和测试规则。</p>
+                    </div>
+                </div>
+
                 <div class="bg-white rounded-xl shadow-lg p-4" id="stepsSection" style="display: none;">
                     <h3 class="text-lg font-semibold text-gray-800 mb-4">📋 执行步骤</h3>
                     <div id="stepsList" class="space-y-2">
@@ -448,8 +493,11 @@
         
         // 全局状态
         const CHAT_SESSION_STORAGE_KEY = 'sqlmongo2_chat_session_id';
+        const CHAT_USER_STORAGE_KEY = 'sqlmongo2_chat_user_id';
+        const DEFAULT_CHAT_USER_ID = 'anonymous-user';
         const EXECUTION_PANEL_STORAGE_KEY = 'sqlmongo2_execution_panel_open';
         let chatSessionId = null;
+        let chatUserId = null;
         let currentQueryParams = null;
         let currentPage = 1;
         let tableData = [];
@@ -464,6 +512,7 @@
         let fullscreenChartMeta = null;
         let lastInsightPayload = null;
         let executionStepTimers = new Map();
+        let chatMessageSequence = 0;
 
         // 初始化日期
         function generateChatSessionId() {
@@ -471,6 +520,27 @@
                 return window.crypto.randomUUID();
             }
             return `session-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        }
+
+        function generateMessageElementId(prefix = 'msg') {
+            chatMessageSequence += 1;
+            return `${prefix}-${Date.now()}-${chatMessageSequence}`;
+        }
+
+        function normalizeChatUserId(userId) {
+            const value = String(userId || '').trim();
+            if (!value) return DEFAULT_CHAT_USER_ID;
+            if (/^user-[0-9a-f-]+$/i.test(value)) {
+                return DEFAULT_CHAT_USER_ID;
+            }
+            return value;
+        }
+
+        function renderCurrentUserBadge(userId) {
+            const el = document.getElementById('currentUserBadge');
+            if (!el) return;
+            el.textContent = String(userId || DEFAULT_CHAT_USER_ID);
+            el.title = `当前生效 user_id：${el.textContent}`;
         }
 
         function rememberChatSessionId(sessionId) {
@@ -498,10 +568,293 @@
             return rememberChatSessionId(generateChatSessionId());
         }
 
-        document.addEventListener('DOMContentLoaded', function() {
+        function rememberChatUserId(userId) {
+            const normalizedUserId = normalizeChatUserId(userId);
+            if (!normalizedUserId) return chatUserId;
+            chatUserId = normalizedUserId;
+            try {
+                window.localStorage.setItem(CHAT_USER_STORAGE_KEY, normalizedUserId);
+            } catch (error) {
+                console.warn('persist user id failed', error);
+            }
+            renderCurrentUserBadge(chatUserId);
+            return chatUserId;
+        }
+
+        function getChatUserId() {
+            if (chatUserId) return chatUserId;
+            try {
+                const stored = window.localStorage.getItem(CHAT_USER_STORAGE_KEY);
+                if (stored) {
+                    return rememberChatUserId(stored);
+                }
+            } catch (error) {
+                console.warn('read user id failed', error);
+            }
+            return rememberChatUserId(DEFAULT_CHAT_USER_ID);
+        }
+
+        function formatConversationTime(value) {
+            const text = String(value || '').trim();
+            if (!text) return '';
+            const date = new Date(text);
+            if (Number.isNaN(date.getTime())) return text;
+            const month = `${date.getMonth() + 1}`.padStart(2, '0');
+            const day = `${date.getDate()}`.padStart(2, '0');
+            const hour = `${date.getHours()}`.padStart(2, '0');
+            const minute = `${date.getMinutes()}`.padStart(2, '0');
+            return `${month}-${day} ${hour}:${minute}`;
+        }
+
+        function summarizeConversationPreview(text, limit = 34) {
+            const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+            if (!normalized) return '新对话';
+            return normalized.length <= limit ? normalized : `${normalized.slice(0, Math.max(limit - 1, 1))}…`;
+        }
+
+        function buildWelcomeMessageHtml() {
+            return `
+                <div class="flex items-start space-x-3">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-r from-green-400 to-blue-500 flex items-center justify-center text-white font-bold">AI</div>
+                    <div class="message-ai rounded-2xl rounded-tl-none px-4 py-3 max-w-xl">
+                        <p class="text-gray-800">你好！我是 AI 数据查询助手，可以帮你查询设备信息和传感器数据。</p>
+                        <p class="text-gray-600 text-sm mt-2">试试这些问题：</p>
+                        <ul class="text-gray-600 text-sm mt-1 space-y-1">
+                            <li>• 查询 a1_b9 设备今天的电流数据</li>
+                            <li>• 有哪些项目可用？</li>
+                            <li>• 搜索包含 b9 的设备</li>
+                        </ul>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderWelcomeMessage() {
+            const container = document.getElementById('chatContainer');
+            if (!container) return;
+            container.innerHTML = buildWelcomeMessageHtml();
+            container.scrollTop = 0;
+        }
+
+        function setActiveConversation(sessionId) {
+            activeConversationSessionId = sessionId || null;
+            rememberChatSessionId(sessionId || generateChatSessionId());
+            document.querySelectorAll('[data-conversation-id]').forEach((item) => {
+                const current = item.getAttribute('data-conversation-id') || '';
+                const active = current && activeConversationSessionId && current === activeConversationSessionId;
+                item.classList.toggle('bg-purple-50', active);
+                item.classList.toggle('border-purple-300', active);
+                item.classList.toggle('bg-white', !active);
+            });
+        }
+
+        function renderConversationList() {
+            const container = document.getElementById('conversationList');
+            if (!container) return;
+            const rows = Array.isArray(conversationSessions) ? conversationSessions : [];
+            if (!rows.length) {
+                container.innerHTML = '<div class="p-4 text-sm text-gray-500">还没有历史对话，先发起一轮新对话吧。</div>';
+                return;
+            }
+            container.innerHTML = rows.map((item) => {
+                const sessionId = String(item.session_id || '');
+                const active = activeConversationSessionId && sessionId === activeConversationSessionId;
+                const title = summarizeConversationPreview(item.title || item.first_user_message || '新对话', 20);
+                const preview = summarizeConversationPreview(item.last_message || item.first_user_message || '暂无消息', 38);
+                const timeText = formatConversationTime(item.last_message_at);
+                return `
+                    <button data-conversation-id="${escapeHtml(sessionId)}" onclick="openConversation('${escapeHtml(sessionId)}')" class="w-full text-left p-4 border-l-4 ${active ? 'border-purple-500 bg-purple-50' : 'border-transparent bg-white hover:bg-gray-50'} transition">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="text-sm font-semibold text-gray-800 truncate">${escapeHtml(title)}</div>
+                            <div class="text-[11px] text-gray-400 whitespace-nowrap">${escapeHtml(timeText)}</div>
+                        </div>
+                        <div class="mt-1 text-xs text-gray-500 line-clamp-2">${escapeHtml(preview)}</div>
+                    </button>
+                `;
+            }).join('');
+        }
+
+        async function loadConversationSessions(options = {}) {
+            const keepCurrent = options.keepCurrent !== false;
+            const container = document.getElementById('conversationList');
+            if (container && !options.silent) {
+                container.innerHTML = '<div class="p-4 text-sm text-gray-500">正在加载历史对话...</div>';
+            }
+            try {
+                const response = await fetch(`${API_BASE}/api/chat/sessions?user_id=${encodeURIComponent(getChatUserId())}&limit=50`);
+                const data = await response.json();
+                conversationSessions = Array.isArray(data.items) ? data.items : [];
+                const currentSessionId = keepCurrent ? (activeConversationSessionId || getChatSessionId()) : null;
+                renderConversationList();
+                if (currentSessionId && conversationSessions.some((item) => item.session_id === currentSessionId)) {
+                    setActiveConversation(currentSessionId);
+                }
+                return conversationSessions;
+            } catch (error) {
+                if (container) {
+                    container.innerHTML = `<div class="p-4 text-sm text-red-500">${escapeHtml(error.message || '加载历史对话失败')}</div>`;
+                }
+                return [];
+            }
+        }
+
+        function buildReplayArtifactsFromMessageMeta(messageMeta) {
+            const meta = messageMeta && typeof messageMeta === 'object' ? messageMeta : null;
+            if (!meta) {
+                return { tableData: null, insightData: null, responseMeta: null };
+            }
+
+            const tableType = meta.table_type || '';
+            let replayTableData = null;
+            let replaySensorQueryResult = null;
+
+            if (meta.show_table) {
+                if (tableType !== 'projects' && tableType !== 'devices' && tableType !== 'project_stats' && meta.query_params) {
+                    const previewData = meta.table_preview && meta.table_preview.success
+                        ? {
+                            ...meta.table_preview,
+                            analysis: meta.analysis || meta.table_preview.analysis,
+                            chart_specs: Array.isArray(meta.chart_specs) ? meta.chart_specs : meta.table_preview.chart_specs,
+                            show_charts: typeof meta.show_charts === 'boolean' ? meta.show_charts : meta.table_preview.show_charts,
+                        }
+                        : null;
+                    if (previewData) {
+                        replaySensorQueryResult = previewData;
+                        replayTableData = buildSensorTableData(previewData, replaySensorQueryResult.analysis, meta.query_params);
+                    }
+                } else if (tableType === 'projects') {
+                    const projects = Array.isArray(meta.projects)
+                        ? meta.projects
+                        : (Array.isArray(meta.query_params?.projects) ? meta.query_params.projects : []);
+                    if (projects.length) {
+                        replayTableData = {
+                            headers: ['ID', '????'],
+                            rows: projects.map(p => ({
+                                'ID': p.id || '-',
+                                '????': p.project_name || '-',
+                            })),
+                            total_count: projects.length,
+                            has_more: false,
+                        };
+                    }
+                } else if (tableType === 'devices' && Array.isArray(meta.devices)) {
+                    replayTableData = {
+                        headers: ['????', '????', '????'],
+                        rows: meta.devices.map(d => ({
+                            '????': d.device || d.device_code || '-',
+                            '????': d.name || '-',
+                            '????': d.project_name || '-',
+                        })),
+                        total_count: meta.devices.length,
+                        has_more: false,
+                    };
+                } else if (tableType === 'project_stats') {
+                    const projectStats = Array.isArray(meta.project_stats)
+                        ? meta.project_stats
+                        : (Array.isArray(meta.query_params?.stats) ? meta.query_params.stats : []);
+                    if (projectStats.length) {
+                        replayTableData = {
+                            headers: ['??', '????', '????'],
+                            rows: projectStats.map((s, index) => ({
+                                '??': index + 1,
+                                '????': s.project_name || '-',
+                                '????': s.device_count || 0,
+                            })),
+                            total_count: projectStats.length,
+                            has_more: false,
+                        };
+                    }
+                }
+            }
+
+            const insightSource = replaySensorQueryResult && replaySensorQueryResult.success ? replaySensorQueryResult : meta;
+            const insightData = {
+                analysis: insightSource.analysis,
+                chartSpecs: insightSource.chart_specs,
+                showCharts: insightSource.show_charts,
+            };
+            return { tableData: replayTableData, insightData, responseMeta: meta };
+        }
+
+        async function openConversation(sessionId) {
+            const targetSessionId = String(sessionId || '').trim();
+            if (!targetSessionId) return;
+            setActiveConversation(targetSessionId);
+            renderConversationList();
+            try {
+                const response = await fetch(`${API_BASE}/api/chat/history?session_id=${encodeURIComponent(targetSessionId)}&user_id=${encodeURIComponent(getChatUserId())}&limit=200`);
+                const data = await response.json();
+                const items = Array.isArray(data.items) ? data.items : [];
+                chatHistory = items.map((item) => ({ role: item.role, content: item.message, meta: item.message_meta || null }));
+                currentQueryParams = null;
+                lastInsightPayload = null;
+                const tableSection = document.getElementById('tableSection');
+                if (tableSection) tableSection.style.display = 'none';
+                const container = document.getElementById('chatContainer');
+                if (!container) return;
+                container.innerHTML = '';
+                if (!items.length) {
+                    renderWelcomeMessage();
+                    return;
+                }
+                items.forEach((item) => {
+                    if (item.role === 'user') {
+                        addMessage(String(item.message || ''), 'user');
+                        return;
+                    }
+                    const replay = buildReplayArtifactsFromMessageMeta(item.message_meta);
+                    addMessage(
+                        String(item.message || ''),
+                        'ai',
+                        replay.tableData,
+                        replay.insightData,
+                        replay.responseMeta,
+                    );
+                });
+                if (container) {
+                    container.scrollTop = container.scrollHeight;
+                }
+            } catch (error) {
+                console.error('open conversation failed', error);
+            }
+        }
+
+        async function startNewConversation() {
+            chatHistory = [];
+            currentQueryParams = null;
+            lastInsightPayload = null;
+            const tableSection = document.getElementById('tableSection');
+            if (tableSection) tableSection.style.display = 'none';
+            const nextSessionId = generateChatSessionId();
+            rememberChatSessionId(nextSessionId);
+            setActiveConversation(nextSessionId);
+            renderConversationList();
+            renderWelcomeMessage();
+            const input = document.getElementById('chatInput');
+            if (input) input.focus();
+        }
+
+        async function initializeConversationState() {
+            const sessions = await loadConversationSessions({ keepCurrent: true });
+            const currentSessionId = getChatSessionId();
+            if (sessions.some((item) => item.session_id === currentSessionId)) {
+                await openConversation(currentSessionId);
+                return;
+            }
+            if (sessions.length) {
+                await openConversation(sessions[0].session_id);
+                return;
+            }
+            await startNewConversation();
+        }
+
+        document.addEventListener('DOMContentLoaded', async function() {
             const today = new Date().toISOString().split('T')[0];
             document.getElementById('startDate').value = today;
             document.getElementById('endDate').value = today;
+            getChatSessionId();
+            getChatUserId();
+            await initializeConversationState();
         });
 
         // 发送消息 - 使用流式输出
@@ -514,6 +867,19 @@
                 'chart', 'plot', 'echart', 'echarts', 'matplotlib'
             ];
             return keywords.some(keyword => normalized.includes(keyword));
+        }
+
+        function getSemanticMappingAdminUrl() {
+            try {
+                return new URL('/semantic-mapping', API_BASE).toString();
+            } catch (error) {
+                console.warn('build semantic mapping url failed', error);
+                return '/semantic-mapping';
+            }
+        }
+
+        function openSemanticMappingAdmin() {
+            window.open(getSemanticMappingAdminUrl(), '_blank', 'noopener');
         }
 
         function rememberInsightPayload(payload) {
@@ -604,6 +970,7 @@
                         message,
                         history: chatHistory.slice(-10),
                         session_id: getChatSessionId(),
+                        user_id: getChatUserId(),
                         alias_confirmation: options.aliasConfirmation || null,
                     })
                 });
@@ -685,6 +1052,7 @@
                                 finalResponse = data;
                                 if (data.session_id) {
                                     rememberChatSessionId(data.session_id);
+                                    setActiveConversation(data.session_id);
                                 }
                                 if (!streamedAnswerText && data.response) {
                                     streamedAnswerText = String(data.response || '');
@@ -713,7 +1081,7 @@
                         const tableType = finalResponse.table_type;
 
                         if (tableType !== 'projects' && tableType !== 'devices' && tableType !== 'project_stats' && finalResponse.query_params) {
-                            console.log('?????????', finalResponse.query_params);
+                            console.log('查询参数：', finalResponse.query_params);
                             currentQueryParams = finalResponse.query_params;
 
                             const previewData = finalResponse.table_preview && finalResponse.table_preview.success
@@ -751,7 +1119,7 @@
                                         tableData = buildSensorTableData(queryData, sensorQueryResult.analysis, finalResponse.query_params);
                                     }
                                 } catch (e) {
-                                    console.error('?????????', e);
+                                    console.error('查询预览数据失败：', e);
                                 }
                             }
                         }
@@ -828,7 +1196,7 @@
 
         function addStreamingMessage() {
             const container = document.getElementById('chatContainer');
-            const id = 'streaming-' + Date.now();
+            const id = generateMessageElementId('streaming');
             
             const html = `
                 <div class="flex items-start space-x-3" id="${id}">
@@ -1651,7 +2019,7 @@ function askQuestion(question) {
             const matchReason = String(candidate.match_reason || '').trim();
             if (matchReason) {
                 const parts = matchReason
-                    .split(/\s*[\uFF0C|]\s*/)
+                    .split(/\s*[\uFF0C,|;\uFF1B]\s*/)
                     .map(formatClarificationReasonPart)
                     .filter(Boolean);
                 if (parts.length) {
@@ -1687,28 +2055,52 @@ function askQuestion(question) {
             const projectName = candidate.project_name || candidate.project_code_name || '-';
             const matchReason = buildClarificationReason(candidate);
             const matchType = String(candidate.match_type || '').trim();
+            const retrievalSource = String(candidate.retrieval_source || '').trim();
+            const confidenceLevel = String(candidate.confidence_level || '').trim();
             const isExactCodeConflict = matchType === 'exact_code_conflict';
             const isAggregateAllOption = matchType === 'aggregate_all_option' || String(candidate.scope_mode || '').trim() === 'aggregate_all';
-            const hasSemanticScore = matchType === 'semantic' && Number.isFinite(Number(candidate.match_score));
-            const badgeHtml = isExactCodeConflict
-                ? `<span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">\u7cbe\u786e\u7801\u547d\u4e2d</span>`
-                : (isAggregateAllOption
-                    ? `<span class="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">\u8de8\u9879\u76ee\u6c47\u603b</span>`
-                    : (hasSemanticScore
-                        ? `<span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">score ${escapeHtml(Number(candidate.match_score).toFixed(1))}</span>`
-                        : ''));
+            const hasSemanticScore = !isExactCodeConflict && (matchType === 'semantic' || retrievalSource === 'semantic' || retrievalSource === 'merged') && Number.isFinite(Number(candidate.match_score));
+            const isRecommended = Boolean(candidate.is_recommended);
+            const retrievalSourceMap = {
+                lexical: '\u8bcd\u6cd5\u53ec\u56de',
+                semantic: '\u8bed\u4e49\u53ec\u56de',
+                merged: '\u878d\u5408\u6392\u5e8f',
+                session_alias: '\u4f1a\u8bdd\u8bb0\u5fc6',
+                aggregate_all: '\u8de8\u9879\u76ee\u6c47\u603b',
+            };
+            const confidenceMap = {
+                high: '\u9ad8\u7f6e\u4fe1',
+                medium: '\u4e2d\u7f6e\u4fe1',
+                low: '\u4f4e\u7f6e\u4fe1',
+            };
+            const badges = [];
+            if (isRecommended) {
+                badges.push('<span class="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700">\u63a8\u8350</span>');
+            }
+            if (isExactCodeConflict) {
+                badges.push('<span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">\u7cbe\u786e\u7801\u547d\u4e2d</span>');
+            } else if (isAggregateAllOption) {
+                badges.push('<span class="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">\u8de8\u9879\u76ee\u6c47\u603b</span>');
+            } else if (hasSemanticScore) {
+                badges.push(`<span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">score ${escapeHtml(Number(candidate.match_score).toFixed(2))}</span>`);
+            }
+            const metaParts = [];
+            if (retrievalSourceMap[retrievalSource]) metaParts.push(retrievalSourceMap[retrievalSource]);
+            if (confidenceMap[confidenceLevel]) metaParts.push(confidenceMap[confidenceLevel]);
+            const metaText = metaParts.join(' \u00b7 ');
             return `
-                <div class="rounded-lg border border-gray-200 p-3">
+                <div class="rounded-lg border ${isRecommended ? 'border-emerald-300 bg-emerald-50/40' : 'border-gray-200'} p-3 transition-colors">
                     <div class="flex items-start justify-between gap-3 flex-wrap">
                         <div class="min-w-0 flex-1">
                             <div class="text-sm font-medium text-gray-900 break-all">${escapeHtml(candidate.device || '-')}</div>
-                            <div class="text-sm text-gray-700 break-all">${escapeHtml(candidate.name || '\u672a\u547d\u540d\u8bbe\u5907')}</div>
+                            <div class="text-sm text-gray-700 break-all">${escapeHtml(candidate.name || '未命名设备')}</div>
                             <div class="text-xs text-gray-500 mt-1">${escapeHtml(projectName)}</div>
+                            ${metaText ? `<div class="text-[11px] text-gray-500 mt-1">${escapeHtml(metaText)}</div>` : ''}
                             ${matchReason && !isExactCodeConflict ? `<div class="text-xs text-amber-700 mt-2">${escapeHtml(matchReason)}</div>` : ''}
                         </div>
                         <div class="flex flex-col items-end gap-2">
-                            ${badgeHtml}
-                            <button onclick="confirmClarificationCandidate('${messageId}', ${groupIndex}, ${candidateIndex})" class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-700">${isAggregateAllOption ? '\u9009\u5168\u90e8' : '\u9009\u8fd9\u4e2a\u8bbe\u5907'}</button>
+                            ${badges.join('')}
+                            <button onclick="confirmClarificationCandidate('${messageId}', ${groupIndex}, ${candidateIndex})" class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-700">${isAggregateAllOption ? '选全部' : '选这个设备'}</button>
                         </div>
                     </div>
                 </div>
@@ -1890,7 +2282,223 @@ function askQuestion(question) {
             });
         }
 
+        function getMemoryUiState(messageId) {
+            if (!window.__memoryUiState) {
+                window.__memoryUiState = {};
+            }
+            if (!window.__memoryUiState[messageId]) {
+                window.__memoryUiState[messageId] = { action: null, suggestion: null, responseMeta: null };
+            }
+            return window.__memoryUiState[messageId];
+        }
+
+        function buildMemoryItemsHtml(items = []) {
+            const safeItems = Array.isArray(items) ? items : [];
+            if (!safeItems.length) {
+                return '<div class="text-xs text-gray-500">\u6682\u65e0\u8bb0\u5f55</div>';
+            }
+            return safeItems.map((item) => `
+                <div class="rounded-lg border border-emerald-100 bg-white p-3 space-y-1">
+                    <div class="text-sm font-semibold text-gray-800">\u6211\u8bf4\u6cd5\uff1a${escapeHtml(item.alias_text || '-')}</div>
+                    <div class="text-sm text-gray-700">\u7cfb\u7edf\u7406\u89e3\uff1a${escapeHtml(item.canonical_text || item.target_value || '-')}</div>
+                    <div class="text-xs text-gray-500">\u751f\u6548\u8303\u56f4\uff1a${escapeHtml(item.scope_label || '-')}</div>
+                    <div class="text-xs text-gray-400">\u66f4\u65b0\u65f6\u95f4\uff1a${escapeHtml(item.updated_at || item.created_at || '-')}</div>
+                </div>
+            `).join('');
+        }
+
+        function dismissMemorySuggestion(messageId) {
+            const el = document.getElementById(`memory-suggestion-${messageId}`);
+            if (el) el.remove();
+        }
+
+        function submitMemoryScopeSelection(messageId, optionIndex) {
+            const state = getMemoryUiState(messageId);
+            const action = state.action || {};
+            const options = Array.isArray(action.scope_options) ? action.scope_options : [];
+            const option = options[optionIndex];
+            if (!option) return;
+            const meta = state.responseMeta || {};
+            const originalQuestion = meta.original_question || '';
+            const continueQuery = meta.intent_type !== 'memory_command' && Boolean(originalQuestion);
+            sendMessage(originalQuestion || `\u628a${action.alias_text || ''}\u8bb0\u6210${action.canonical_text || ''}`, {
+                skipUserMessage: true,
+                skipChartFollowUp: true,
+                aliasConfirmation: {
+                    action: 'create_memory',
+                    alias_text: action.alias_text || '',
+                    canonical_text: action.canonical_text || '',
+                    scope_type: option.scope_type || 'global',
+                    scope_value: option.scope_value || 'global',
+                    source: 'chat_command',
+                    continue_query: continueQuery,
+                    original_question: originalQuestion,
+                },
+            });
+        }
+
+        function submitMemoryDelete(messageId, itemIndex) {
+            const state = getMemoryUiState(messageId);
+            const action = state.action || {};
+            const items = Array.isArray(action.items) ? action.items : [];
+            const item = items[itemIndex];
+            if (!item || !item.id) return;
+            sendMessage('\u5220\u9664\u8fd9\u4e2a\u53eb\u6cd5', {
+                skipUserMessage: true,
+                skipChartFollowUp: true,
+                aliasConfirmation: {
+                    action: 'delete_memory',
+                    memory_id: item.id,
+                },
+            });
+        }
+
+        function submitMemorySuggestionRemember(messageId, optionIndex) {
+            const state = getMemoryUiState(messageId);
+            const suggestion = state.suggestion || {};
+            const scopeOptions = Array.isArray(suggestion.scope_options) ? suggestion.scope_options : [];
+            const option = scopeOptions[optionIndex];
+            if (!option) return;
+            const meta = state.responseMeta || {};
+            const originalQuestion = meta.original_question || '';
+            sendMessage(originalQuestion || `\u628a${suggestion.alias_text || ''}\u8bb0\u6210${suggestion.recommended_canonical || ''}`, {
+                skipUserMessage: true,
+                skipChartFollowUp: true,
+                aliasConfirmation: {
+                    action: 'create_memory',
+                    alias_text: suggestion.alias_text || '',
+                    canonical_text: suggestion.recommended_canonical || '',
+                    scope_type: option.scope_type || 'global',
+                    scope_value: option.scope_value || 'global',
+                    source: 'memory_suggestion',
+                    continue_query: Boolean(originalQuestion),
+                    original_question: originalQuestion,
+                },
+            });
+        }
+
+        function submitMemorySuggestionQueryOnce(messageId) {
+            const state = getMemoryUiState(messageId);
+            const suggestion = state.suggestion || {};
+            const meta = state.responseMeta || {};
+            const originalQuestion = meta.original_question || '';
+            sendMessage(originalQuestion || `${suggestion.alias_text || ''}`, {
+                skipUserMessage: true,
+                skipChartFollowUp: true,
+                aliasConfirmation: {
+                    action: 'query_once',
+                    alias_text: suggestion.alias_text || '',
+                    canonical_text: suggestion.recommended_canonical || '',
+                    original_question: originalQuestion,
+                },
+            });
+        }
+
+        function buildMemoryActionHtml(messageId, responseMeta) {
+            const action = responseMeta && responseMeta.memory_action_result;
+            if (!action || typeof action !== 'object') return '';
+            const state = getMemoryUiState(messageId);
+            state.responseMeta = responseMeta || {};
+            state.action = action;
+            const actionType = String(action.action || '').trim();
+            const displayItems = Array.isArray(action.items) && action.items.length
+                ? action.items
+                : (Array.isArray(action.applied_items) && action.applied_items.length
+                    ? action.applied_items
+                    : []);
+            const invalidItems = Array.isArray(action.invalid_items) ? action.invalid_items : [];
+            const itemsHtml = buildMemoryItemsHtml(displayItems);
+            const invalidItemsHtml = invalidItems.length
+                ? `
+                    <div class="space-y-2">
+                        <div class="text-xs font-medium text-amber-700">以下长期记忆已失效，系统已自动忽略</div>
+                        ${buildMemoryItemsHtml(invalidItems)}
+                    </div>
+                `
+                : '';
+            if (actionType === 'scope_confirmation') {
+                const options = Array.isArray(action.scope_options) ? action.scope_options : [];
+                return `
+                    <div class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 space-y-3">
+                        <div>
+                            <div class="text-sm font-semibold text-emerald-900">\u5e38\u7528\u53eb\u6cd5\u5f85\u786e\u8ba4</div>
+                            <div class="text-xs text-emerald-700">${escapeHtml(action.message || '\u8bf7\u9009\u62e9\u751f\u6548\u8303\u56f4')}</div>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            ${options.map((option, index) => `
+                                <button onclick="submitMemoryScopeSelection('${messageId}', ${index})" class="px-3 py-2 text-xs rounded-lg border ${option.recommended ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-emerald-200 bg-white text-emerald-800 hover:bg-emerald-100'}">${escapeHtml(option.label || '\u786e\u8ba4')}</button>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            if (actionType === 'delete_confirmation') {
+                return `
+                    <div class="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 space-y-3">
+                        <div>
+                            <div class="text-sm font-semibold text-rose-900">\u5220\u9664\u5e38\u7528\u53eb\u6cd5</div>
+                            <div class="text-xs text-rose-700">${escapeHtml(action.message || '\u8bf7\u9009\u62e9\u8981\u5220\u9664\u7684\u8bb0\u5f55')}</div>
+                        </div>
+                        <div class="space-y-2">
+                            ${(Array.isArray(action.items) ? action.items : []).map((item, index) => `
+                                <div class="rounded-lg border border-rose-100 bg-white p-3 flex items-center justify-between gap-3">
+                                    <div>
+                                        <div class="text-sm font-semibold text-gray-800">${escapeHtml(item.alias_text || '-')} = ${escapeHtml(item.canonical_text || '-')}</div>
+                                        <div class="text-xs text-gray-500">${escapeHtml(item.scope_label || '-')}</div>
+                                    </div>
+                                    <button onclick="submitMemoryDelete('${messageId}', ${index})" class="px-3 py-2 text-xs rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-100">\u5220\u9664\u8fd9\u6761</button>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            const titleMap = {
+                created: '\u5df2\u8bb0\u4f4f\u5e38\u7528\u53eb\u6cd5',
+                deleted: '\u5df2\u5220\u9664\u5e38\u7528\u53eb\u6cd5',
+                listed: '\u5e38\u7528\u53eb\u6cd5\u5217\u8868',
+                not_found: '\u672a\u627e\u5230\u5e38\u7528\u53eb\u6cd5',
+                applied: '\u5df2\u7ed3\u5408\u957f\u671f\u8bb0\u5fc6',
+            };
+            return `
+                <div class="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 space-y-3">
+                    <div>
+                        <div class="text-sm font-semibold text-emerald-900">${escapeHtml(titleMap[actionType] || '\u957f\u671f\u8bb0\u5fc6')}</div>
+                        <div class="text-xs text-emerald-700">${escapeHtml(action.message || '')}</div>
+                    </div>
+                    ${displayItems.length ? `<div class="space-y-2">${itemsHtml}</div>` : ''}
+                    ${invalidItemsHtml}
+                </div>
+            `;
+        }
+
+        function buildMemorySuggestionHtml(messageId, responseMeta) {
+            const suggestion = responseMeta && responseMeta.memory_suggestion;
+            if (!suggestion || typeof suggestion !== 'object') return '';
+            const state = getMemoryUiState(messageId);
+            state.responseMeta = responseMeta || {};
+            state.suggestion = suggestion;
+            const scopeOptions = Array.isArray(suggestion.scope_options) ? suggestion.scope_options : [];
+            return `
+                <div id="memory-suggestion-${messageId}" class="mt-3 rounded-xl border border-sky-200 bg-sky-50 p-3 space-y-3">
+                    <div>
+                        <div class="text-sm font-semibold text-sky-900">\u987a\u624b\u8bb0\u4f4f\u8fd9\u4e2a\u53eb\u6cd5</div>
+                        <div class="text-xs text-sky-700">\u6211\u8fd8\u4e0d\u8ba4\u8bc6\u201c${escapeHtml(suggestion.alias_text || '')}\u201d\uff0c\u8981\u4e0d\u8981\u4ee5\u540e\u9ed8\u8ba4\u6309\u201c${escapeHtml(suggestion.recommended_canonical || '')}\u201d\u7406\u89e3\uff1f</div>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        ${scopeOptions.map((option, index) => `
+                            <button onclick="submitMemorySuggestionRemember('${messageId}', ${index})" class="px-3 py-2 text-xs rounded-lg border ${option.recommended ? 'border-sky-600 bg-sky-600 text-white' : 'border-sky-200 bg-white text-sky-800 hover:bg-sky-100'}">\u8bb0\u4f4f\u4e3a\u201c${escapeHtml(suggestion.recommended_canonical || '')}\u201d${option.label ? `\uff08${escapeHtml(option.label)}\uff09` : ''}</button>
+                        `).join('')}
+                        <button onclick="submitMemorySuggestionQueryOnce('${messageId}')" class="px-3 py-2 text-xs rounded-lg border border-sky-200 bg-white text-sky-800 hover:bg-sky-100">\u8fd9\u6b21\u5148\u6309\u201c${escapeHtml(suggestion.recommended_canonical || '')}\u201d\u67e5\u8be2</button>
+                        <button onclick="dismissMemorySuggestion('${messageId}')" class="px-3 py-2 text-xs rounded-lg border border-gray-200 bg-white text-gray-600 hover:bg-gray-100">\u4e0d\u7528</button>
+                    </div>
+                </div>
+            `;
+        }
+
         function buildClarificationCandidatesHtml(messageId, responseMeta) {
+
+
             const groups = responseMeta && responseMeta.clarification_required && Array.isArray(responseMeta.clarification_candidates)
                 ? responseMeta.clarification_candidates
                 : [];
@@ -1925,6 +2533,12 @@ function askQuestion(question) {
 
         function buildResolvedScopeHtml(messageId, responseMeta) {
             const scope = responseMeta && responseMeta.resolved_scope;
+            if (!scope) {
+                return '';
+            }
+            if (Boolean(scope.scope_card_suppressed)) {
+                return '';
+            }
             const items = scope && Array.isArray(scope.items) ? scope.items : [];
             if (!items.length) {
                 return '';
@@ -2027,10 +2641,12 @@ function askQuestion(question) {
 
             const clarificationHtml = buildClarificationCandidatesHtml(messageId, responseMeta);
             const resolvedScopeHtml = buildResolvedScopeHtml(messageId, responseMeta);
+            const memoryActionHtml = buildMemoryActionHtml(messageId, responseMeta);
+            const memorySuggestionHtml = buildMemorySuggestionHtml(messageId, responseMeta);
             const inlineInsightHtml = buildInlineInsightHtml(messageId, insightData);
             const executionSteps = Array.isArray(responseMeta?.executionSteps) ? responseMeta.executionSteps : [];
             const executionHtml = executionSteps.length ? `<div id="${messageId}-execution-host"></div>` : '';
-            const hasWideContent = Boolean(clarificationHtml || resolvedScopeHtml || inlineInsightHtml);
+            const hasWideContent = Boolean(clarificationHtml || resolvedScopeHtml || memoryActionHtml || memorySuggestionHtml || inlineInsightHtml);
             const aiBubbleClass = hasWideContent
                 ? 'message-ai rounded-2xl rounded-tl-none px-4 py-3 w-full max-w-full xl:max-w-5xl'
                 : 'message-ai rounded-2xl rounded-tl-none px-4 py-3 max-w-3xl';
@@ -2041,6 +2657,8 @@ function askQuestion(question) {
                 tableHtml,
                 clarificationHtml,
                 resolvedScopeHtml,
+                memoryActionHtml,
+                memorySuggestionHtml,
                 inlineInsightHtml,
                 executionSteps,
                 executionHtml,
@@ -2059,6 +2677,8 @@ function askQuestion(question) {
             bubbleEl.innerHTML = `
                 ${renderParts.textHtml}
                 ${renderParts.resolvedScopeHtml}
+                ${renderParts.memoryActionHtml}
+                ${renderParts.memorySuggestionHtml}
                 ${renderParts.executionHtml}
                 ${renderParts.clarificationHtml}
                 ${renderParts.tableHtml}
@@ -2099,7 +2719,7 @@ function askQuestion(question) {
 
 function addMessage(text, type, tableData = null, insightData = null, responseMeta = null) {
             const container = document.getElementById('chatContainer');
-            const id = 'msg-' + Date.now();
+            const id = generateMessageElementId('msg');
 
             const html = type === 'user' ? `
                 <div class="flex items-start space-x-3 justify-end" id="${id}">

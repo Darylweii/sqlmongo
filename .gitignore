@@ -49,6 +49,10 @@ htmlcov/
 logs/
 tmp_*
 
+# Local runtime databases
+*.sqlite3
+*.db
+
 # Reports and generated results
 TEST_REPORT_*.md
 test_results_*.json

@@ -1,0 +1,493 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>sqlmongo · 查询流程可视化说明</title>
+  <style>
+    :root {
+      --bg:#07111f; --bg2:#0b1828; --panel:rgba(11,24,40,.78); --line:rgba(148,163,184,.14);
+      --text:#e8f1ff; --muted:#9db0c8; --blue:#63b3ff; --violet:#8b5cf6; --teal:#14b8a6; --warn:#f59e0b;
+      --shadow:0 18px 50px rgba(0,0,0,.35); --r1:28px; --r2:20px; --r3:14px; --max:1320px;
+    }
+    *{box-sizing:border-box} html{scroll-behavior:smooth}
+    body{margin:0;font-family:"Microsoft YaHei","PingFang SC","Segoe UI",sans-serif;color:var(--text);
+      background:radial-gradient(circle at top left,rgba(99,179,255,.18),transparent 25%),radial-gradient(circle at top right,rgba(139,92,246,.14),transparent 28%),linear-gradient(180deg,#050b16 0%,#07111f 40%,#081422 100%)}
+    .page{max-width:var(--max);margin:0 auto;padding:26px 20px 60px}
+    .glass{background:linear-gradient(180deg,rgba(13,27,42,.82),rgba(8,20,34,.82));border:1px solid rgba(148,163,184,.12);backdrop-filter:blur(14px);box-shadow:var(--shadow);border-radius:var(--r1)}
+    .topbar{position:sticky;top:14px;z-index:9;display:flex;justify-content:space-between;gap:20px;align-items:center;padding:14px 18px;margin-bottom:22px;border-radius:999px;background:rgba(7,17,31,.72);border:1px solid rgba(148,163,184,.12);backdrop-filter:blur(18px);box-shadow:var(--shadow)}
+    .brand{display:flex;gap:14px;align-items:center}.mark{width:40px;height:40px;border-radius:14px;background:linear-gradient(135deg,var(--blue),var(--violet));display:grid;place-items:center;color:#03101d;font-weight:800}
+    .brand h1{margin:0;font-size:16px}.brand p{margin:4px 0 0;font-size:12px;color:var(--muted)}
+    .nav{display:flex;gap:10px;flex-wrap:wrap}.nav a{color:var(--muted);padding:9px 14px;border-radius:999px;font-size:13px;text-decoration:none}.nav a:hover{background:rgba(255,255,255,.04);color:var(--text)}
+    .hero{display:grid;grid-template-columns:1.15fr .85fr;gap:22px;margin-bottom:24px}.hero-main,.hero-side,.section{padding:26px}
+    .eyebrow{display:inline-flex;gap:8px;padding:8px 14px;border-radius:999px;background:rgba(99,179,255,.1);border:1px solid rgba(99,179,255,.22);font-size:13px;margin-bottom:16px}
+    .hero h2{margin:0;font-size:clamp(30px,4.8vw,54px);line-height:1.08;letter-spacing:-.03em;max-width:12ch}.hero p{margin:16px 0 0;color:var(--muted);line-height:1.8;font-size:16px;max-width:58ch}
+    .tags{display:flex;gap:10px;flex-wrap:wrap;margin-top:20px}.tag{padding:10px 13px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid rgba(148,163,184,.12);font-size:13px}
+    .metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.metric{padding:18px;border-radius:var(--r2);background:rgba(255,255,255,.035);border:1px solid rgba(148,163,184,.1)}
+    .metric .num{font-size:28px;font-weight:800;margin-bottom:6px}.metric .label{font-size:13px;color:var(--muted);line-height:1.7}
+    .quote{margin-top:14px;padding:18px;border-radius:var(--r2);background:linear-gradient(135deg,rgba(99,179,255,.08),rgba(20,184,166,.08));border:1px solid rgba(99,179,255,.18);font-size:14px;line-height:1.8}
+    .section{margin-top:22px}.head{display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap;margin-bottom:18px}.head h3{margin:0;font-size:28px;letter-spacing:-.03em}.head p{margin:8px 0 0;color:var(--muted);font-size:14px;line-height:1.8;max-width:64ch}
+    .legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted)} .legend span{display:inline-flex;align-items:center;gap:7px;padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid rgba(148,163,184,.12)}
+    .dot{width:10px;height:10px;border-radius:50%;display:inline-block}.blue{background:var(--blue)}.teal{background:var(--teal)}.violet{background:var(--violet)}.warn{background:var(--warn)}
+        .detail{padding:22px;border-radius:var(--r1);background:rgba(255,255,255,.03);border:1px solid rgba(148,163,184,.1);position:sticky;top:96px}
+    .step{font-size:12px;color:var(--blue);font-weight:700;letter-spacing:.12em}.detail h4{margin:6px 0 0;font-size:24px}.role{display:inline-block;margin-top:10px;padding:7px 10px;border-radius:999px;background:rgba(99,179,255,.12);border:1px solid rgba(99,179,255,.2);font-size:12px}
+    .desc{margin:14px 0 18px;color:var(--muted);line-height:1.8;font-size:14px}.io{display:grid;gap:12px}.io-card{padding:15px;border-radius:var(--r3);background:rgba(255,255,255,.04);border:1px solid rgba(148,163,184,.1)}
+    .io-card h5{margin:0 0 10px;font-size:14px}.chips{display:flex;gap:8px;flex-wrap:wrap}.chip{padding:7px 10px;border-radius:10px;background:rgba(255,255,255,.03);border:1px solid rgba(148,163,184,.12);font-size:12px;color:#d7e5f8}
+    .value{margin-top:14px;padding:13px 14px;border-radius:14px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.16);font-size:13px;line-height:1.8;color:#dafce6}
+    .cards3,.cards4,.cards2,.stages,.events,.demo{display:grid;gap:16px}.cards4{grid-template-columns:repeat(4,1fr)}.cards3{grid-template-columns:repeat(3,1fr)}.cards2,.demo{grid-template-columns:repeat(2,1fr)}.stages{grid-template-columns:repeat(4,1fr)}.events{grid-template-columns:repeat(4,1fr)}
+    .card,.stage-box,.event,.qbox{padding:18px;border-radius:20px;background:rgba(255,255,255,.035);border:1px solid rgba(148,163,184,.1)} .card h4,.stage-box h4{margin:0 0 8px;font-size:18px}.card p,.card li,.stage-box p,.stage-box li,.event span,.qbox span{color:var(--muted);line-height:1.75;font-size:14px}
+    .icon{width:42px;height:42px;border-radius:14px;display:grid;place-items:center;margin-bottom:12px;background:linear-gradient(135deg,rgba(99,179,255,.18),rgba(139,92,246,.18));border:1px solid rgba(99,179,255,.18);font-size:20px}.card ul,.stage-box ul{margin:10px 0 0;padding-left:18px}
+    .stage-box{position:relative}.stage-box:not(:last-child)::after{content:"→";position:absolute;right:-12px;top:50%;transform:translateY(-50%);font-size:22px;color:rgba(191,219,254,.6);font-weight:800}
+    
+    .flow-layout{display:grid;grid-template-columns:minmax(0,1.18fr) minmax(320px,.82fr);gap:18px;align-items:start}
+    .flow-canvas{padding:16px;border-radius:24px;background:rgba(255,255,255,.03);border:1px solid rgba(148,163,184,.1);overflow:hidden}
+    .flow-svg{width:100%;height:auto;display:block;min-width:0;max-width:100%}
+    .flow-arrow{stroke:url(#flowLine);stroke-width:3;fill:none;marker-end:url(#arrowMain)}
+    .flow-arrow.warn{stroke:#f59e0b;stroke-dasharray:8 8;marker-end:url(#arrowWarn)}
+    .flow-label{fill:#e8f1ff;font-size:16px;font-weight:700}
+    .flow-sub{fill:#9db0c8;font-size:12px}
+    .flow-note{fill:#ffd892;font-size:12px;font-weight:600}
+    .flow-box,.flow-branch{cursor:pointer;transition:opacity .18s ease}
+    .flow-box:hover,.flow-branch:hover{opacity:.96}
+    .flow-box .shape,.flow-branch .shape{fill:rgba(13,27,42,.96);stroke:rgba(148,163,184,.16);stroke-width:1.4}
+    .flow-branch .shape{stroke:#f59e0b;stroke-dasharray:7 6;fill:rgba(245,158,11,.08)}
+    .flow-box.active .shape,.flow-branch.active .shape{stroke:rgba(99,179,255,.82);filter:drop-shadow(0 0 18px rgba(99,179,255,.22))}
+    .flow-box.active .shape{fill:rgba(16,34,55,.98)}
+    .flow-branch.active .shape{fill:rgba(74,46,9,.55)}
+    .decision{fill:rgba(99,179,255,.08);stroke:rgba(99,179,255,.35);stroke-width:1.5}
+    .decision-text{fill:#dbeafe;font-size:12px;font-weight:700}
+    
+    .swimlane-board{display:grid;gap:14px}
+    .lane{display:grid;grid-template-columns:180px minmax(0,1fr);gap:16px;align-items:stretch}
+    .lane-label{padding:18px;border-radius:20px;background:linear-gradient(180deg,rgba(99,179,255,.10),rgba(139,92,246,.06));border:1px solid rgba(99,179,255,.16);display:flex;flex-direction:column;justify-content:center}
+    .lane-label b{font-size:16px;line-height:1.4;margin-bottom:6px}
+    .lane-label span{font-size:12px;line-height:1.7;color:var(--muted)}
+    .lane-track{position:relative;padding:16px 18px;border-radius:22px;background:rgba(255,255,255,.025);border:1px solid rgba(148,163,184,.08)}
+    .lane-track::before{content:"";position:absolute;left:42px;top:-14px;bottom:-14px;width:2px;background:linear-gradient(180deg,rgba(99,179,255,0),rgba(99,179,255,.45),rgba(139,92,246,.35),rgba(99,179,255,0));}
+    .lane-step-row{position:relative;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+    .lane-step-row + .lane-step-row{margin-top:16px}
+    .lane-node,.lane-branch,.lane-decision{position:relative;z-index:1}
+    .lane-node,.lane-branch{min-width:240px;max-width:320px;padding:18px 18px 16px;border-radius:20px;background:rgba(13,27,42,.96);border:1px solid rgba(148,163,184,.14);box-shadow:0 10px 24px rgba(0,0,0,.12);cursor:pointer;transition:border-color .18s ease, box-shadow .18s ease, opacity .18s ease}
+    .lane-branch{background:linear-gradient(180deg,rgba(64,43,10,.42),rgba(13,27,42,.92));border:1px dashed rgba(245,158,11,.55)}
+    .lane-node:hover,.lane-branch:hover{opacity:.97}
+    .lane-node.active,.lane-branch.active{border-color:rgba(99,179,255,.52);box-shadow:0 0 0 1px rgba(99,179,255,.16),0 12px 30px rgba(99,179,255,.12)}
+    .lane-node b,.lane-branch b{display:block;font-size:17px;line-height:1.45;margin-bottom:8px}
+    .lane-node span,.lane-branch span{display:block;font-size:13px;line-height:1.75;color:var(--muted)}
+    .lane-decision{width:110px;height:110px;display:grid;place-items:center;transform:rotate(45deg);border:1.5px solid rgba(99,179,255,.34);background:rgba(99,179,255,.08)}
+    .lane-decision > div{transform:rotate(-45deg);text-align:center;font-size:12px;line-height:1.45;font-weight:700;color:#dbeafe}
+    .flow-down{position:relative;z-index:1;width:20px;height:34px;display:flex;align-items:center;justify-content:center;color:#7cc1ff;font-size:22px;font-weight:700}
+    .flow-right{position:relative;z-index:1;color:#7cc1ff;font-size:22px;font-weight:700;line-height:1}
+    .flow-branch-note{position:relative;z-index:1;padding:10px 12px;border-radius:14px;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.24);color:#ffd892;font-size:13px;line-height:1.7}
+
+    .example-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:18px}
+    .example-case{padding:18px;border-radius:20px;background:rgba(255,255,255,.035);border:1px solid rgba(148,163,184,.1)}
+    .example-case .kind{display:inline-flex;padding:6px 10px;border-radius:999px;font-size:12px;background:rgba(99,179,255,.12);border:1px solid rgba(99,179,255,.18);margin-bottom:10px}
+    .example-case h4{margin:0 0 8px;font-size:17px;line-height:1.6}
+    .example-case p{margin:0;color:var(--muted);font-size:13px;line-height:1.8}
+    .example-case ul{margin:10px 0 0;padding-left:18px}
+    .example-case li{color:var(--muted);font-size:13px;line-height:1.8}
+    .mapping-table{margin-top:18px}
+.table-wrap{overflow:auto;border-radius:18px;border:1px solid rgba(148,163,184,.1);background:rgba(255,255,255,.03)} table{width:100%;border-collapse:collapse;min-width:920px} th,td{padding:14px 16px;border-bottom:1px solid rgba(148,163,184,.08);text-align:left;vertical-align:top;font-size:13px;line-height:1.7} th{font-size:12px;letter-spacing:.08em;text-transform:uppercase;background:rgba(255,255,255,.03)} td{color:var(--muted)} td strong{color:var(--text)}
+    .question{padding:18px;border-radius:18px;background:linear-gradient(135deg,rgba(99,179,255,.14),rgba(139,92,246,.14));border:1px solid rgba(99,179,255,.18);font-size:18px;line-height:1.7;margin-bottom:14px}.mini{display:grid;gap:10px}.mini-row{display:flex;gap:12px;padding:12px 14px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid rgba(148,163,184,.09)}.mini-row strong{min-width:84px;font-size:13px}.footer{margin-top:18px;padding:16px 18px;border-radius:18px;background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.16);font-size:14px;line-height:1.8;color:#dafce6}
+    @media (max-width:1160px){.hero,.flow-layout,.demo,.cards2{grid-template-columns:1fr}.detail{position:static}.cards4,.stages,.events{grid-template-columns:repeat(2,1fr)}.stage-box::after{display:none}}
+    @media (max-width:760px){.page{padding:16px 14px 36px}.topbar{position:static;flex-direction:column;align-items:stretch;border-radius:24px}.nav{justify-content:flex-start}.hero,.metrics,.cards4,.cards3,.cards2,.stages,.events,.flow-grid,.demo{grid-template-columns:1fr}.hero-main,.hero-side,.section{padding:18px}.flow-grid::before{display:none}.hero h2{max-width:none}}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="topbar">
+      <div class="brand">
+        <div class="mark">S</div>
+        <div>
+          <h1>sqlmongo 查询流程可视化说明</h1>
+          <p>适合汇报的一页式网页：完整解释主流程、输入输出、语义映射与页面结果</p>
+        </div>
+      </div>
+      <div class="nav">
+        <a href="#overview">总览</a>
+        <a href="#pipeline">流程图</a>
+        <a href="#steps">输入输出</a>
+        <a href="#semantic">语义层</a>
+        <a href="#demo">示例</a>
+      </div>
+    </div>
+
+    <section class="hero" id="overview">
+      <div class="hero-main glass">
+        <div class="eyebrow">⚡ 主流程：用户问题 → QueryPlan → DB → Answer Style</div>
+        <h2>一句自然语言，系统自动走完整条数据理解与查询链路</h2>
+        <p>系统不会把用户问题直接扔给数据库，而是先生成统一的 <strong>QueryPlan</strong>，再做设备/项目/时间/指标确认，随后路由到正确的数据分片并并行查询，最后按回答风格输出答案、表格、智能分析和图表。</p>
+        <div class="tags">
+          <span class="tag">默认主编排：DAG</span>
+          <span class="tag">接口入口：`/api/chat/stream`</span>
+          <span class="tag">页面返回：SSE 流式</span>
+          <span class="tag">歧义处理：候选澄清 + 会话记忆</span>
+        </div>
+      </div>
+      <div class="hero-side glass">
+        <div class="metrics">
+          <div class="metric"><div class="num">6</div><div class="label">主处理节点<br>Intent → Override → Metadata → Router → Fetch → Synthesizer</div></div>
+          <div class="metric"><div class="num">4</div><div class="label">前端可见事件<br>step_start / step_done / answer_delta / complete</div></div>
+          <div class="metric"><div class="num">3</div><div class="label">语义层条目类型<br>Project / Metric / Device</div></div>
+          <div class="metric"><div class="num">2</div><div class="label">关键分支<br>快捷短路 / 重码澄清</div></div>
+        </div>
+        <div class="quote"><strong>一句汇报话术：</strong><br>系统先把口语问题翻译成标准任务单，再自动确认作用域、查询数据库、做统计分析，最后按汇报口径输出结果；若有歧义，先让用户确认，不会直接乱查。</div>
+      </div>
+    </section>
+    <section class="section glass" id="pipeline">
+      <div class="head">
+        <div>
+          <h3>可视化总流程图</h3>
+          <p>点击任意流程节点，右侧会显示该步骤的职责、关键输入、关键输出和业务价值。重点展示默认 DAG 主链路，以及快捷短路、歧义澄清两条分支。</p>
+        </div>
+        <div class="legend">
+          <span><i class="dot blue"></i>主链路</span>
+          <span><i class="dot teal"></i>数据库执行</span>
+          <span><i class="dot violet"></i>结果组织</span>
+          <span><i class="dot warn"></i>澄清 / 短路分支</span>
+        </div>
+      </div>
+
+
+
+
+      <div class="flow-layout">
+        <div class="flow-canvas">
+          <div class="swimlane-board">
+            <div class="lane">
+              <div class="lane-label">
+                <b>&#27891;&#36947; 1&#65306;&#29992;&#25143; / &#21069;&#31471;</b>
+                <span>&#29992;&#25143;&#21457;&#38382;&#65292;&#21069;&#31471;&#25552;&#20132;&#35831;&#27714;&#65292;&#24182;&#24320;&#22987;&#20934;&#22791;&#27969;&#24335;&#25509;&#25910;&#32467;&#26524;&#12290;</span>
+              </div>
+              <div class="lane-track">
+                <div class="lane-step-row">
+                  <div class="lane-node active" data-step="ingress">
+                    <b>&#9312; &#25509;&#21475;&#25509;&#20837;</b>
+                    <span>&#21069;&#31471;&#35843;&#29992; <code>/api/chat/stream</code>&#65292;&#25658;&#24102; <code>message / history / session_id / alias_memory</code>&#12290;</span>
+                  </div>
+                  <div class="flow-right">&#8594;</div>
+                  <div class="lane-node" data-step="sse">
+                    <b>SSE &#27969;&#24335;&#36755;&#20986;</b>
+                    <span>&#21518;&#32493;&#25345;&#32493;&#36820;&#22238; <code>step_start / step_done / answer_delta / complete</code>&#12290;</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="lane">
+              <div class="lane-label">
+                <b>&#27891;&#36947; 2&#65306;&#29702;&#35299;&#23618;</b>
+                <span>&#25226;&#33258;&#28982;&#35821;&#35328;&#32763;&#35793;&#25104;&#26631;&#20934;&#20219;&#21153;&#21333;&#65292;&#24182;&#20915;&#23450;&#26159;&#21542;&#21487;&#20197;&#36208;&#24555;&#25463;&#36335;&#24452;&#12290;</span>
+              </div>
+              <div class="lane-track">
+                <div class="lane-step-row"><div class="flow-down">&#8595;</div></div>
+                <div class="lane-step-row">
+                  <div class="lane-node" data-step="queryplan">
+                    <b>&#9313; QueryPlan &#35299;&#26512;</b>
+                    <span>&#35782;&#21035; <code>query_mode / data_type / time / response_style</code>&#65292;&#29983;&#25104;&#32479;&#19968; <code>QueryPlan</code>&#12290;</span>
+                  </div>
+                  <div class="flow-right">&#8594;</div>
+                  <div class="lane-node" data-step="override">
+                    <b>&#9314; &#21160;&#20316;&#20462;&#27491;</b>
+                    <span>&#21028;&#26029;&#26159;&#32487;&#32493;&#36208;&#26102;&#24207;&#26597;&#35810;&#65292;&#36824;&#26159;&#25913;&#36208;&#39033;&#30446;&#21015;&#34920;&#12289;&#35774;&#22791;&#21015;&#34920;&#31561;&#24555;&#25463;&#30701;&#36335;&#12290;</span>
+                  </div>
+                  <div class="flow-right">&#8594;</div>
+                  <div class="lane-decision"><div>&#26159;&#21542;&#30446;&#24405;&#22411;&#38382;&#39064;</div></div>
+                </div>
+                <div class="lane-step-row">
+                  <div class="lane-branch" data-step="shortcut">
+                    <b>&#24555;&#25463;&#30701;&#36335;</b>
+                    <span>&#39033;&#30446;&#21015;&#34920; / &#35774;&#22791;&#21015;&#34920; / &#39033;&#30446;&#32479;&#35745;&#31561;&#30446;&#24405;&#22411;&#38382;&#39064;&#65292;&#19981;&#36827;&#20837;&#23436;&#25972;&#26102;&#24207;&#26597;&#35810;&#38142;&#36335;&#12290;</span>
+                  </div>
+                  <div class="flow-branch-note">&#26159; &#8594; &#30452;&#25509;&#36820;&#22238;&#21015;&#34920; / &#32479;&#35745;</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="lane">
+              <div class="lane-label">
+                <b>&#27891;&#36947; 3&#65306;&#20316;&#29992;&#22495;&#35299;&#26512;</b>
+                <span>&#30830;&#35748;&#35774;&#22791;&#12289;&#39033;&#30446;&#12289; TG&#12289;&#23545;&#27604;&#23545;&#35937;&#65307;&#33509;&#26377;&#27495;&#20041;&#65292;&#24517;&#39035;&#20808;&#28548;&#28165;&#12290;</span>
+              </div>
+              <div class="lane-track">
+                <div class="lane-step-row"><div class="flow-down">&#8595;</div></div>
+                <div class="lane-step-row">
+                  <div class="lane-node" data-step="metadata">
+                    <b>&#9315; &#20316;&#29992;&#22495;&#35299;&#26512;</b>
+                    <span>&#35299;&#26512;&#35774;&#22791; / &#39033;&#30446; / TG / &#23545;&#27604;&#23545;&#35937;&#65292;&#24182;&#32467;&#21512; <code>alias_memory</code> &#25910;&#25947;&#26597;&#35810;&#33539;&#22260;&#12290;</span>
+                  </div>
+                  <div class="flow-right">&#8594;</div>
+                  <div class="lane-decision"><div>&#26159;&#21542;&#23384;&#22312;&#27495;&#20041; / &#37325;&#30721;</div></div>
+                </div>
+                <div class="lane-step-row">
+                  <div class="lane-branch" data-step="clarify">
+                    <b>&#20505;&#36873;&#28548;&#28165;</b>
+                    <span>&#22810;&#20010;&#21516;&#21517;&#35774;&#22791;&#26102;&#65292;&#20808;&#23637;&#31034;&#20505;&#36873;&#21345;&#29255;&#65307;&#29992;&#25143;&#30830;&#35748;&#21518;&#20889;&#22238;&#20250;&#35805;&#35760;&#24518;&#65292;&#20877;&#32487;&#32493;&#26597;&#35810;&#12290;</span>
+                  </div>
+                  <div class="flow-branch-note">&#26159; &#8594; &#20572;&#19979;&#26469;&#20808;&#30830;&#35748;&#65292;&#19981;&#20081;&#29468;</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="lane">
+              <div class="lane-label">
+                <b>&#27891;&#36947; 4&#65306;&#25968;&#25454;&#25191;&#34892;</b>
+                <span>&#30830;&#23450;&#26597;&#35810;&#20998;&#29255;&#65292;&#35775;&#38382;&#25968;&#25454;&#24211;&#65292;&#24182;&#36820;&#22238;&#21407;&#22987;&#25968;&#25454;&#19982;&#32479;&#35745;&#32467;&#26524;&#12290;</span>
+              </div>
+              <div class="lane-track">
+                <div class="lane-step-row"><div class="flow-down">&#8595;</div></div>
+                <div class="lane-step-row">
+                  <div class="lane-node" data-step="router">
+                    <b>&#9316; &#20998;&#29255;&#36335;&#30001;</b>
+                    <span>&#35745;&#31639; <code>collections / data_tags</code>&#65292;&#20915;&#23450;&#21435;&#21738;&#20123;&#25968;&#25454;&#20998;&#29255;&#26597;&#35810;&#12290;</span>
+                  </div>
+                  <div class="flow-right">&#8594;</div>
+                  <div class="lane-node" data-step="fetch">
+                    <b>&#9317; &#24182;&#34892;&#26597;&#35810;</b>
+                    <span>MongoDB &#24182;&#21457;&#21462;&#25968;&#65292;&#36820;&#22238; <code>raw_data / statistics / query_info</code>&#12290;</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="lane">
+              <div class="lane-label">
+                <b>&#27891;&#36947; 5&#65306;&#32467;&#26524;&#36755;&#20986;</b>
+                <span>&#25353;&#22238;&#31572;&#39118;&#26684;&#32452;&#32455;&#32467;&#26524;&#65292;&#24182;&#22312;&#21069;&#31471;&#23637;&#31034;&#31572;&#22797;&#12289;&#34920;&#26684;&#12289;&#20998;&#26512;&#21644;&#22270;&#34920;&#12290;</span>
+              </div>
+              <div class="lane-track">
+                <div class="lane-step-row"><div class="flow-down">&#8595;</div></div>
+                <div class="lane-step-row">
+                  <div class="lane-node" data-step="synth">
+                    <b>&#9318; &#32467;&#26524;&#32452;&#32455;</b>
+                    <span>&#25353;&#22238;&#31572;&#39118;&#26684;&#29983;&#25104;&#31572;&#22797;&#65292;&#36755;&#20986;&#34920;&#26684;&#12289;&#26234;&#33021;&#20998;&#26512;&#21644;&#22270;&#34920;&#37197;&#32622;&#12290;</span>
+                  </div>
+                  <div class="flow-right">&#8594;</div>
+                  <div class="lane-node" data-step="frontend">
+                    <b>&#9319; &#21069;&#31471;&#23637;&#31034;</b>
+                    <span>&#28210;&#26579;&#31572;&#22797; / &#34920;&#26684; / &#22270;&#34920; / &#20316;&#29992;&#22495;&#21345;&#29255; / &#25191;&#34892;&#36807;&#31243;&#12290;</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="detail">
+          <div class="step" id="detail-step">STEP 01</div>
+          <h4 id="detail-title">&#25509;&#21475;&#25509;&#20837;</h4>
+          <div class="role" id="detail-role">&#25509;&#20837;&#23618;</div>
+          <div class="desc" id="detail-desc"></div>
+          <div class="io">
+            <div class="io-card"><h5>&#20027;&#35201;&#36755;&#20837;</h5><div class="chips" id="detail-inputs"></div></div>
+            <div class="io-card"><h5>&#20027;&#35201;&#36755;&#20986;</h5><div class="chips" id="detail-outputs"></div></div>
+          </div>
+          <div class="value" id="detail-value"></div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section glass" id="steps">
+      <div class="head">
+        <div>
+          <h3>每一步的输入 / 输出 / 价值</h3>
+          <p>这部分适合直接复制到 Word 或 PPT。字段名尽量和系统内部保持一致，但解释方式偏业务化，便于汇报。</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>步骤</th>
+              <th>主要工作</th>
+              <th>输入参数</th>
+              <th>输出参数</th>
+              <th>业务价值</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>1. 接口接入</strong></td><td>接收前端问题，整理本轮上下文和会话信息</td><td>`message`、`history`、`session_id`、`alias_memory`</td><td>`effective_message`、`message_with_history`</td><td>把“当前问题 + 历史上下文”组成一轮完整任务</td></tr>
+            <tr><td><strong>2. QueryPlan 解析</strong></td><td>把自然语言翻译成标准查询任务单</td><td>`user_query`</td><td>`query_plan`、`intent`、`query_mode`、`data_type`、`time_start`、`time_end`</td><td>统一后续执行口径，避免直接拿口语去查数据库</td></tr>
+            <tr><td><strong>3. 动作修正</strong></td><td>判断是走时序查询，还是直接走项目列表 / 统计等短路</td><td>`query_plan`、`intent`、`resolved_time_range`</td><td>`override_action`、`override_reason`、`override_terminal`</td><td>简单问题快速返回，避免所有请求都走重型链路</td></tr>
+            <tr><td><strong>4. 作用域解析</strong></td><td>解析设备、项目、TG、对比对象，并结合会话记忆缩小范围</td><td>`target`、`project_hints`、`alias_memory`、`comparison_targets`</td><td>`device_codes`、`device_names`、`tg_values`、`resolved_devices`</td><td>把“a1_b9”“火锅店”“味多美”映射成系统认识的正式对象</td></tr>
+            <tr><td><strong>5. 歧义澄清</strong></td><td>遇到多个同名设备时，返回候选卡片让用户确认</td><td>`clarification_candidates`</td><td>`clarification_required`、候选设备列表、确认后的 alias memory</td><td>保证结果准确，不默认乱选设备或跨项目汇总</td></tr>
+            <tr><td><strong>6. 分片路由</strong></td><td>按时间范围、数据类型、标签确定要访问哪些集合</td><td>`time_start`、`time_end`、`data_type`、`requested_tags`</td><td>`collections`、`data_tags`</td><td>避免全库扫描，提升查询性能</td></tr>
+            <tr><td><strong>7. 并行查询</strong></td><td>并发访问 MongoDB，拿回原始数据与基础统计</td><td>`device_codes`、`collections`、`data_tags`、`time_start`、`time_end`</td><td>`raw_data`、`total_count`、`statistics`、`query_info`</td><td>把“要查什么”真正落到数据库执行</td></tr>
+            <tr><td><strong>8. 结果组织</strong></td><td>按回答风格生成结论、表格预览、智能分析和图表配置</td><td>`statistics`、`query_plan`、`response_style`、`query_mode`</td><td>`final_response`、`show_table`、`table_preview`、`analysis`、`chart_specs`</td><td>把原始数据变成业务和领导都能看懂的结果</td></tr>
+            <tr><td><strong>9. SSE 返回</strong></td><td>把执行过程和最终答案流式推给前端</td><td>所有中间节点结果</td><td>`step_start`、`step_done`、`answer_delta`、`complete`</td><td>让页面有过程感，也便于排查问题</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+    <section class="section glass" id="semantic">
+      <div class="head">
+        <div>
+          <h3>语义层映射：系统是怎么“听懂人话”的</h3>
+          <p>语义层不是替代数据库，而是先把用户说法映射成标准对象，帮助系统更稳地理解“项目名、设备名、指标名、俗称、同义词”。当前项目的语义资产主要由 `semantic_entries.json`、`semantic_layer.faiss`、`semantic_layer_metadata.json` 组成。</p>
+        </div>
+      </div>
+
+      <div class="stages">
+        <div class="stage-box">
+          <h4>① 语义条目构建</h4>
+          <p>从 MySQL 元数据和语义配置生成统一条目文件。</p>
+          <ul>
+            <li>来源脚本：`scripts/build_semantic_layer.py`</li>
+            <li>输出文件：`data/semantic_entries.json`</li>
+            <li>本质：把“项目 / 指标 / 设备”变成可检索文本</li>
+          </ul>
+        </div>
+        <div class="stage-box">
+          <h4>② 向量索引构建</h4>
+          <p>把语义条目转成向量，写入 FAISS 索引。</p>
+          <ul>
+            <li>来源脚本：`scripts/build_vector_index.py`</li>
+            <li>索引文件：`data/semantic_layer.faiss`</li>
+            <li>元数据：`data/semantic_layer_metadata.json`</li>
+          </ul>
+        </div>
+        <div class="stage-box">
+          <h4>③ 查询时召回</h4>
+          <p>用户提问后，语义层先召回相关项目、设备、指标候选。</p>
+          <ul>
+            <li>支持标准叫法</li>
+            <li>支持简称、别名、关键词</li>
+            <li>低置信度时进入候选确认</li>
+          </ul>
+        </div>
+        <div class="stage-box">
+          <h4>④ 映射到正式查询</h4>
+          <p>最终仍会映射回结构化的 QueryPlan 和数据库条件。</p>
+          <ul>
+            <li>目标设备 `device_codes`</li>
+            <li>目标标签 `data_tags`</li>
+            <li>目标项目 / 作用域</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="cards3" style="margin-top:18px;">
+        <div class="card">
+          <div class="icon">🏢</div>
+          <h4>Project 条目</h4>
+          <p>用于理解项目名、项目简称和项目编码口径。</p>
+          <ul>
+            <li>字段示意：`project_id`、`project_name`、`project_code_name`</li>
+            <li>作用：支持“北京电力项目”“智慧物联网能效平台”这类提问</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="icon">📈</div>
+          <h4>Metric 条目</h4>
+          <p>用于理解指标名、标签名、单位、同义词。</p>
+          <ul>
+            <li>字段示意：`tag`、`name`、`unit`、`description`、`synonym`</li>
+            <li>作用：把“用电量 / ep”“A 相电压 / ua”统一到标准指标</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="icon">🔌</div>
+          <h4>Device 条目</h4>
+          <p>用于理解设备编码、设备名称、设备类型、所属项目和 TG。</p>
+          <ul>
+            <li>字段示意：`device_id`、`device_name`、`project_name`、`tg`</li>
+            <li>作用：支持“a1_b9”“火锅店”“味多美”“电子楼总表”等说法</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="cards2" style="margin-top:18px;">
+        <div class="card">
+          <div class="icon">🧠</div>
+          <h4>语义层在系统里的位置</h4>
+          <p>语义层更多是“理解增强层”，不是最终执行层。它负责提高召回率和解释能力，但最终仍会回到结构化 QueryPlan 和正式数据库条件上执行。</p>
+        </div>
+        <div class="card">
+          <div class="icon">🛡️</div>
+          <h4>为什么不能只靠语义召回</h4>
+          <p>因为真实业务里有重码设备、跨项目同名、显式设备码、时间和标签精细化条件，所以语义层只负责“找到候选”，不能越过正式的作用域确认和数据库执行规则。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section glass">
+      <div class="head">
+        <div>
+          <h3>系统最终返回给前端的内容</h3>
+          <p>用户看到的不是一句孤立答复，而是一整组可读、可追踪、可核验的结果：答复文本、作用域说明、表格、智能分析、图表和执行步骤。</p>
+        </div>
+      </div>
+      <div class="cards4">
+        <div class="card"><div class="icon">💬</div><h4>最终答复</h4><p>字段：`response` / `final_response`。根据 `response_style` 输出直接结论、对比说明或结构化分析。</p></div>
+        <div class="card"><div class="icon">📋</div><h4>表格预览</h4><p>字段：`show_table`、`table_type`、`table_preview`。用于展示原始明细、汇总表或项目列表。</p></div>
+        <div class="card"><div class="icon">📊</div><h4>智能分析</h4><p>字段：`analysis`、`focused_result`。展示均值、总量、趋势、波动、异常占比等结果。</p></div>
+        <div class="card"><div class="icon">📈</div><h4>图表配置</h4><p>字段：`chart_specs`、`show_charts`。供前端绘制趋势图、对比图和统计图。</p></div>
+      </div>
+      <div class="events" style="margin-top:16px;">
+        <div class="event"><strong>`step_start`</strong><br><span>告诉页面某个处理步骤已经开始，例如“解析 QueryPlan”“执行数据库查询”。</span></div>
+        <div class="event"><strong>`step_done`</strong><br><span>告诉页面某个步骤已完成，并附带耗时、摘要信息和部分查询上下文。</span></div>
+        <div class="event"><strong>`answer_delta`</strong><br><span>把最终回答按分段流式输出，用户不会一直空等。</span></div>
+        <div class="event"><strong>`complete`</strong><br><span>把最终完整结果一次性落地，包括答复、表格、分析卡片、图表和查询参数。</span></div>
+      </div>
+    </section>
+
+    <section class="section glass" id="demo">
+      <div class="head">
+        <div>
+          <h3>典型问题案例：更方便解释流程和语义层</h3>
+          <p>下面把系统常见的 6 类问题都列出来：标准查询、对比、重码澄清、语义别名、快捷短路、异常分析。拿这几类去汇报，最容易把系统讲明白。</p>
+        </div>
+      </div>
+
+      <div class="example-grid">
+        <div class="example-case"><div class="kind">标准查询</div><h4>“a2_b1 在 2024 年 1 月 1 日的 ua 是多少？”</h4><p>这类问题信息最完整：设备码、时间、单相标签都很明确。</p><ul><li>QueryPlan：sensor_query</li><li>data_type：ua</li><li>requested_tags：[ua]</li><li>通常不需要语义层补充，只需做重码检查</li></ul></div>
+        <div class="example-case"><div class="kind">对比查询</div><h4>“a1_b9 与 b1_b14 哪个用电更多？”</h4><p>系统会自动识别两个对比对象，生成 comparison 类型查询。</p><ul><li>QueryPlan：comparison</li><li>targets：[a1_b9, b1_b14]</li><li>默认指标：ep 用电量</li><li>输出：对比结论 + 汇总表 + 智能分析</li></ul></div>
+        <div class="example-case"><div class="kind">重码澄清</div><h4>“查询 a1_b9 今天的电压数据”</h4><p>如果多个项目里都有 a1_b9，系统不会直接查，而是先要求确认具体是哪一个设备。</p><ul><li>先命中多个候选设备</li><li>返回候选卡片供用户选择</li><li>确认后写入会话作用域记忆</li><li>再继续原问题</li></ul></div>
+        <div class="example-case"><div class="kind">语义别名</div><h4>“味多美和火锅店的用电量对比”</h4><p>这类问题通常没有显式设备码，需要语义层先把“商户名/俗称”映射成候选设备。</p><ul><li>语义层先召回“味多美”“火锅店”相关设备</li><li>若候选唯一，可直接进入 QueryPlan 执行</li><li>若候选不唯一，再进入澄清分支</li><li>这类问题最能体现语义层价值</li></ul></div>
+        <div class="example-case"><div class="kind">快捷短路</div><h4>“有哪些项目可用？”</h4><p>这是典型目录型问题，不需要走 MongoDB 时序查询链路。</p><ul><li>Action Override 直接改成 list_projects</li><li>跳过 Metadata / Router / Fetch</li><li>直接返回项目列表表格</li></ul></div>
+        <div class="example-case"><div class="kind">异常分析</div><h4>“a1_b9 设备 2024 年 1 月有没有异常用电时间点？”</h4><p>这是分析型问题，不仅要查数据，还要做异常点识别与结果组织。</p><ul><li>QueryPlan：anomaly_points</li><li>通常会查 ep 或相关能耗标签</li><li>输出：异常点数量、时间点、占比、摘要说明</li></ul></div>
+      </div>
+
+      <div class="table-wrap mapping-table">
+        <table>
+          <thead>
+            <tr><th>用户原话</th><th>系统理解重点</th><th>语义层是否参与</th><th>是否可能澄清</th><th>最终落到什么执行</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>a2_b1 在 2024-01-01 的 ua 是多少</strong></td><td>明确设备码 + 明确时间 + 明确单相标签</td><td>低，主要做重码检查</td><td>若 a2_b1 多项目重码，则需要</td><td>单标签时序查询：ua</td></tr>
+            <tr><td><strong>a1_b9 与 b1_b14 哪个用电更多</strong></td><td>识别为对比查询</td><td>中，帮助补足默认指标 / 语义理解</td><td>任一设备重码时需要</td><td>对比查询：comparison + ep</td></tr>
+            <tr><td><strong>味多美和火锅店的用电量对比</strong></td><td>先从商户名映射设备候选</td><td>高，是这类问题的关键</td><td>若候选不唯一则需要</td><td>语义召回 → 设备确认 → 对比查询</td></tr>
+            <tr><td><strong>有哪些项目可用</strong></td><td>识别为目录型问题</td><td>低</td><td>通常不需要</td><td>快捷短路：list_projects</td></tr>
+            <tr><td><strong>a1_b9 今天的电压数据</strong></td><td>设备码明确，但数据类型较宽</td><td>中</td><td>若 a1_b9 多项目重码则需要</td><td>时序查询：电压相关标签</td></tr>
+            <tr><td><strong>北京电力项目有哪些设备</strong></td><td>先理解项目范围，再列设备</td><td>高，项目名口径需映射</td><td>项目命中不清晰时可能需要</td><td>设备列表 / 项目范围列表</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="footer"><strong>汇报建议：</strong>先用上面的 SVG 流程图讲“系统总链路”，再挑 2～3 个问题例子讲“为什么需要 QueryPlan、为什么要有语义层、为什么遇到重码时必须先澄清”。这样最容易讲清楚系统价值。</div>
+    </section>  </div>
+
+  <script>
+    const stepData = {
+      ingress:{index:'STEP 01',title:'接口接入',role:'接入层',desc:'前端页面把用户输入的问题提交到流式接口。后端会先整理会话上下文，包括历史问答、当前问题、会话 ID，以及之前已确认过的设备别名作用域。',inputs:['message','history','session_id','alias_memory'],outputs:['effective_message','message_with_history','request_id'],value:'把“当前一句问题”放回完整会话里理解，避免后续追问被当成全新问题。'},
+      queryplan:{index:'STEP 02',title:'Intent Parser / QueryPlan 解析',role:'理解层',desc:'系统把自然语言问题翻译为结构化 QueryPlan。这里会识别问题模式、设备目标、时间范围、指标类型、对比对象、回答风格等，是整条链路的统一任务单。',inputs:['user_query','semantic_context','history'],outputs:['query_plan','intent','query_mode','data_type','time_start','time_end','comparison_targets'],value:'它解决的是“人说话不标准，但系统执行必须标准”这个核心矛盾。'},
+      override:{index:'STEP 03',title:'Action Override Policy',role:'策略层',desc:'系统根据 QueryPlan 判断当前问题是不是可以走捷径，例如列项目、列设备、做项目统计。若能直接命中快捷路径，就不进入完整时序数据查询。',inputs:['query_plan','intent','resolved_time_range'],outputs:['override_action','override_reason','override_terminal'],value:'让简单问题走简单链路，缩短响应时间，也让两套编排口径保持统一。'},
+      shortcut:{index:'BRANCH A',title:'快捷短路分支',role:'分支路径',desc:'如果用户问的是“有哪些项目”“项目设备统计”“有哪些设备”，系统会在这里直接返回结果，不再进入后面的分片路由与时序查询。',inputs:['override_action=list_projects / get_project_stats / list_devices'],outputs:['final_response','table_type','projects / stats / devices'],value:'这是典型的目录型问题，不需要走完整数据分析链路。'},
+      metadata:{index:'STEP 04',title:'Metadata Mapper / 作用域解析',role:'解析层',desc:'系统把用户口中的设备、项目、关键词，映射成数据库可识别的正式对象。这里会综合项目提示、显式设备码、语义召回结果和会话记忆。',inputs:['target','project_hints','alias_memory','comparison_targets'],outputs:['device_codes','device_names','tg_values','resolved_devices','comparison_device_groups'],value:'把“a1_b9、味多美、火锅店、电子楼总表”等自然表达收敛成正式查询范围。'},
+      clarify:{index:'BRANCH B',title:'候选澄清分支',role:'分支路径',desc:'如果同一个关键词对应多个候选设备，例如多个项目下都有 a1_b9，系统不会默认选一个，而是生成候选卡片让用户确认，确认后再继续查询。',inputs:['clarification_candidates','resolved_rows','keyword'],outputs:['clarification_required=true','candidate_cards','updated_alias_memory'],value:'确保查询“查得准”，而不是“猜得快”。'},
+      router:{index:'STEP 05',title:'Sharding Router / 分片路由',role:'执行准备层',desc:'系统根据时间范围、指标类型和请求标签，决定要访问哪些 MongoDB 集合以及查哪些标签。这里直接关系到后续查询性能。',inputs:['time_start','time_end','data_type','query_mode','requested_tags'],outputs:['collections','data_tags'],value:'避免全库扫描，让系统只查“该月、该标签、该设备”相关的数据分片。'},
+      fetch:{index:'STEP 06',title:'Parallel Fetcher / 并行查询',role:'数据库执行层',desc:'系统按已经确认好的作用域和分片条件，并行访问 MongoDB，拉回原始时序数据，同时输出统计结果和查询说明。',inputs:['device_codes','collections','data_tags','time_start','time_end','comparison_device_groups'],outputs:['raw_data','total_count','statistics','comparison_statistics','query_info'],value:'这是整条链路真正“把数据查回来”的一步，也是性能最敏感的一层。'},
+      synth:{index:'STEP 07',title:'Synthesizer / 答案组织',role:'表达层',desc:'系统根据查询模式、回答风格和统计结果，把原始数据转换成最终可读答案，同时决定是否展示表格、图表和智能分析卡片。',inputs:['raw_data','statistics','query_plan','query_mode','response_style','time_start','time_end'],outputs:['final_response','show_table','table_type','table_preview','analysis','chart_specs','focused_result'],value:'决定用户看到的是“直接回答”“对比结论”还是“结构化分析”。'},
+      frontend:{index:'STEP 08',title:'前端展示层',role:'交互层',desc:'前端根据后端返回的 complete payload，展示最终答复、查询参数、作用域卡片、表格、智能分析、执行过程和图表。',inputs:['response','query_params','resolved_scope','table_preview','analysis','chart_specs'],outputs:['页面答复','作用域卡片','表格','智能分析卡片','图表'],value:'保证系统不只是“答一句话”，而是给出一个可检查、可追踪、可汇报的结果页面。'},
+      sse:{index:'EVENTS',title:'SSE 流式输出',role:'传输层',desc:'整个处理过程中，系统持续往前端发送步骤开始、步骤完成、答案增量和最终完成事件，因此用户可以看到系统一步步在做什么。',inputs:['step states','partial response','final payload'],outputs:['step_start','step_done','answer_delta','complete'],value:'对外表现为“有过程感、不卡死、便于排错”。'}
+    };
+    const $ = id => document.getElementById(id);
+    const nodes = document.querySelectorAll('.lane-node,.lane-branch');
+    function renderChips(el, list){el.innerHTML='';list.forEach(t=>{const s=document.createElement('span');s.className='chip';s.textContent=t;el.appendChild(s);});}
+    function activate(key){const d=stepData[key];if(!d)return;nodes.forEach(n=>n.classList.toggle('active',n.dataset.step===key));$('detail-step').textContent=d.index;$('detail-title').textContent=d.title;$('detail-role').textContent=d.role;$('detail-desc').textContent=d.desc;renderChips($('detail-inputs'),d.inputs);renderChips($('detail-outputs'),d.outputs);$('detail-value').textContent=d.value;}
+    nodes.forEach(n=>n.addEventListener('click',()=>activate(n.dataset.step)));
+    activate('ingress');
+  </script>
+</body>
+</html>
+

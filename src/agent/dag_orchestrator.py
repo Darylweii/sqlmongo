@@ -267,7 +267,7 @@ class DAGOrchestrator:
             max_collections: 最大允许的集合数量阈值（默认 50）
             coder_llm: 代码模型 LLM 实例（可选，用于 SQL/代码生成）
             semantic_layer_config: 语义层配置（可选，为 None 时不使用语义层）
-            use_semantic_search: 是否使用语义搜索进行设备匹配（默认 False）
+            use_semantic_search: compatibility flag; hybrid device resolution remains the default path
         
         需求引用:
             - 需求 5.1: 在初始化时创建语义层实例（如果启用）
@@ -306,21 +306,19 @@ class DAGOrchestrator:
         self._synthesizer = SynthesizerNode(llm)
         self._action_override_policy = ActionOverridePolicyNode(metadata_engine)
         
-        # MetadataMapper: 根据配置选择语义搜索或传统模式
+        # MetadataMapper: 默认启用混合设备解析主路径（词法优先 + 语义补充）
+        # use_semantic_search 保留为兼容参数，不再切换到另一套独立解析逻辑。
+        use_llm_sql = coder_llm is not None
         if use_semantic_search:
-            logger.info("使用语义搜索进行设备匹配")
-            self._metadata_mapper = SemanticMetadataMapperNode(
-                metadata_engine=metadata_engine,
-            )
+            logger.info("使用混合设备解析（词法优先 + 语义补充）")
         else:
-            # 传统模式：使用 LIKE 查询
-            use_llm_sql = coder_llm is not None
-            self._metadata_mapper = MetadataMapperNode(
-                metadata_engine, 
-                coder_llm=coder_llm,
-                use_llm_sql=use_llm_sql
-            )
-        
+            logger.info("使用默认混合设备解析（词法优先 + 语义补充）")
+        self._metadata_mapper = MetadataMapperNode(
+            metadata_engine,
+            coder_llm=coder_llm,
+            use_llm_sql=use_llm_sql,
+            enable_semantic_fallback=True,
+        )
         # 纯 Python 节点（不需要 LLM）
         self._sharding_router = ShardingRouterNode(max_collections)
         self._parallel_fetcher = ParallelFetcherNode(data_fetcher)

@@ -234,14 +234,22 @@
             <div class="text-center lg:text-left">
                 <h1 class="text-3xl font-bold text-gray-800">🤖 AI 数据查询助手</h1>
                 <p class="text-gray-600 mt-2">智能查询设备数据，支持自然语言交互</p>
-                <div class="mt-3 flex items-center justify-center lg:justify-start">
+                <div class="mt-3 flex flex-wrap items-center justify-center lg:justify-start gap-2">
                     <div class="inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700">
                         <span class="font-medium">当前用户</span>
                         <code id="currentUserBadge" class="rounded bg-white px-2 py-0.5 text-xs text-indigo-800 border border-indigo-100">anonymous-user</code>
                     </div>
+                    <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600">
+                        <span class="font-medium">版本</span>
+                        <code id="currentVersionBadge" class="rounded bg-slate-50 px-2 py-0.5 text-xs text-slate-700 border border-slate-200">加载中...</code>
+                    </div>
                 </div>
             </div>
             <div class="flex items-center justify-center lg:justify-end gap-3">
+                <button onclick="openChangelogPage()"
+                    class="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition font-medium shadow-sm">
+                    📝 更新日志
+                </button>
                 <button onclick="openSemanticMappingAdmin()"
                     class="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition font-medium shadow">
                     🧠 语义映射管理
@@ -541,6 +549,14 @@
             if (!el) return;
             el.textContent = String(userId || DEFAULT_CHAT_USER_ID);
             el.title = `当前生效 user_id：${el.textContent}`;
+        }
+
+        function renderCurrentVersionBadge(version, releaseName = '') {
+            const el = document.getElementById('currentVersionBadge');
+            if (!el) return;
+            const safeVersion = String(version || '').trim() || '-';
+            el.textContent = `v${safeVersion}`;
+            el.title = releaseName ? `${safeVersion} · ${releaseName}` : safeVersion;
         }
 
         function rememberChatSessionId(sessionId) {
@@ -854,6 +870,7 @@
             document.getElementById('endDate').value = today;
             getChatSessionId();
             getChatUserId();
+            await loadVersionBadge();
             await initializeConversationState();
         });
 
@@ -880,6 +897,21 @@
 
         function openSemanticMappingAdmin() {
             window.open(getSemanticMappingAdminUrl(), '_blank', 'noopener');
+        }
+
+        function openChangelogPage() {
+            window.open(`${API_BASE}/changelog`, '_blank', 'noopener');
+        }
+
+        async function loadVersionBadge() {
+            try {
+                const response = await fetch(`${API_BASE}/api/version`);
+                const data = await response.json();
+                renderCurrentVersionBadge(data.version, data.release_name || '');
+            } catch (error) {
+                console.warn('load version badge failed', error);
+                renderCurrentVersionBadge('-', '');
+            }
         }
 
         function rememberInsightPayload(payload) {

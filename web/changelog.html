@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>版本更新日志</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800">
+    <div class="max-w-5xl mx-auto px-4 py-8">
+        <div class="bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden">
+            <div class="px-8 py-8 bg-gradient-to-r from-indigo-600 to-blue-600 text-white">
+                <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                        <div class="text-sm uppercase tracking-widest text-indigo-100">Release Notes</div>
+                        <h1 class="text-3xl font-bold mt-2">版本更新日志</h1>
+                        <p class="mt-3 text-indigo-50">查看当前版本、发布时间和本轮重点更新，方便演示、汇报和排查版本差异。</p>
+                    </div>
+                    <div class="rounded-2xl bg-white/10 border border-white/20 px-4 py-3 min-w-[220px]">
+                        <div class="text-xs text-indigo-100">当前版本</div>
+                        <div id="currentVersion" class="text-2xl font-bold mt-1">加载中...</div>
+                        <div id="releaseMeta" class="text-sm text-indigo-100 mt-1"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-8 py-8 space-y-8">
+                <section class="rounded-2xl border border-indigo-100 bg-indigo-50 px-6 py-5">
+                    <div class="text-sm font-semibold text-indigo-900">本版摘要</div>
+                    <p id="versionSummary" class="mt-2 text-sm leading-7 text-indigo-900">加载中...</p>
+                </section>
+
+                <section>
+                    <div class="flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <h2 class="text-xl font-bold text-slate-900">版本历史</h2>
+                            <p class="text-sm text-slate-500 mt-1">按版本整理关键改动，便于快速确认当前系统包含哪些能力。</p>
+                        </div>
+                        <a href="/" class="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-sm font-medium text-slate-700">
+                            返回首页
+                        </a>
+                    </div>
+                    <div id="changelogList" class="mt-6 space-y-4">
+                        <div class="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 text-sm text-slate-500">加载中...</div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8080';
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch] || ch));
+        }
+
+        function renderHistory(items) {
+            const el = document.getElementById('changelogList');
+            if (!Array.isArray(items) || !items.length) {
+                el.innerHTML = '<div class="rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700">暂无版本历史。</div>';
+                return;
+            }
+            el.innerHTML = items.map((item, index) => `
+                <article class="rounded-2xl border ${index === 0 ? 'border-indigo-200 bg-indigo-50' : 'border-slate-200 bg-white'} px-6 py-5 shadow-sm">
+                    <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${index === 0 ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-700'}">
+                                    v${escapeHtml(item.version || '-')}
+                                </span>
+                                <span class="text-xs text-slate-500">${escapeHtml(item.release_date || '-')}</span>
+                            </div>
+                            <h3 class="text-lg font-semibold text-slate-900 mt-3">${escapeHtml(item.title || '未命名版本')}</h3>
+                            <p class="mt-2 text-sm leading-7 text-slate-600">${escapeHtml(item.summary || '')}</p>
+                        </div>
+                    </div>
+                    <div class="mt-4">
+                        <div class="text-sm font-medium text-slate-800">重点改动</div>
+                        <ul class="mt-2 space-y-2">
+                            ${(Array.isArray(item.highlights) ? item.highlights : []).map((highlight) => `
+                                <li class="flex items-start gap-2 text-sm text-slate-600">
+                                    <span class="mt-1 inline-block w-2 h-2 rounded-full bg-indigo-500"></span>
+                                    <span>${escapeHtml(highlight)}</span>
+                                </li>
+                            `).join('')}
+                        </ul>
+                    </div>
+                </article>
+            `).join('');
+        }
+
+        async function loadVersionInfo() {
+            try {
+                const response = await fetch(`${API_BASE}/api/version`);
+                const data = await response.json();
+                document.getElementById('currentVersion').textContent = `v${data.version || '-'}`;
+                document.getElementById('releaseMeta').textContent = [data.release_date || '', data.release_name || ''].filter(Boolean).join(' · ');
+                document.getElementById('versionSummary').textContent = data.summary || '暂无摘要。';
+                renderHistory(data.history || []);
+            } catch (error) {
+                document.getElementById('currentVersion').textContent = '加载失败';
+                document.getElementById('versionSummary').textContent = '未能获取版本信息，请检查后端服务是否正常运行。';
+                document.getElementById('changelogList').innerHTML = `<div class="rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700">${escapeHtml(error.message || '加载失败')}</div>`;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadVersionInfo);
+    </script>
+</body>
+</html>

@@ -39,6 +39,7 @@ from src.semantic_rules import SemanticRuleStore
 from src.user_memory_store import UserMemoryStore
 from src.chat_memory_service import ChatMemoryService
 from src.memory_rewrite import parse_memory_rewrite_json
+from src.version_info import APP_VERSION, build_version_payload
 
 logger = logging.getLogger(__name__)
 
@@ -1306,7 +1307,7 @@ chat_memory_service = ChatMemoryService(
     llm_memory_rewrite=_rewrite_memory_command_with_llm,
 )
 
-app = FastAPI(title="AI Data Router Agent", version="1.0.0")
+app = FastAPI(title="AI Data Router Agent", version=APP_VERSION)
 
 # CORS
 app.add_middleware(
@@ -1371,6 +1372,13 @@ async def index():
 async def semantic_mapping_admin():
     """返回语义映射管理页"""
     with open("web/semantic_mapping_admin.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+
+@app.get("/changelog", response_class=HTMLResponse)
+async def changelog_page():
+    """返回更新日志页"""
+    with open("web/changelog.html", "r", encoding="utf-8") as f:
         return f.read()
 
 
@@ -2300,14 +2308,10 @@ async def search_devices(keyword: str = ""):
 
 @app.get("/api/version")
 async def get_version():
-    """获取后端版本信息 - 用于验证代码是否更新"""
-    return {
-        "version": "1.0.1",
-        "fix": "pagination_duplicate_fix_v3",
-        "sort_method": "logTime_and_id",
-        "timestamp": datetime.now().isoformat(),
-        "description": "MongoDB 查询使用 .sort([('logTime', 1), ('_id', 1)]) 确保分页稳定性"
-    }
+    """获取当前版本与更新摘要"""
+    payload = build_version_payload()
+    payload["timestamp"] = datetime.now().isoformat()
+    return payload
 
 
 if __name__ == "__main__":

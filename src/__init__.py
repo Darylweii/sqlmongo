@@ -1,3 +1,5 @@
 """AI Data Router Agent - Router-Retriever-Generator pattern implementation."""
 
-__version__ = "0.1.0"
+from src.version_info import APP_VERSION
+
+__version__ = APP_VERSION

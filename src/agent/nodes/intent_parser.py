@@ -491,9 +491,9 @@ class IntentParserNode:
 
     def __call__(self, state: GraphState) -> GraphState:
         """
-        ???????
+        解析用户意图并生成标准化查询参数。
 
-        QueryPlan ???????intent ?????? DAG ????????
+        基于 QueryPlan 构建 intent，供后续 DAG 节点继续处理。
         """
         user_query = state.get("user_query", "")
         history = list(state.get("history", []))
@@ -501,11 +501,11 @@ class IntentParserNode:
         if not user_query or not user_query.strip():
             return {
                 **state,
-                "error": "??????",
+                "error": "用户问题不能为空",
                 "error_node": NODE_INTENT_PARSER,
                 "history": history + [{
                     "node": NODE_INTENT_PARSER,
-                    "result": "??: ??????"
+                    "result": "错误：用户问题不能为空"
                 }]
             }
 
@@ -527,7 +527,7 @@ class IntentParserNode:
                     "error_node": NODE_INTENT_PARSER,
                     "history": history + [{
                         "node": NODE_INTENT_PARSER,
-                        "result": f"????: {error_msg}"
+                        "result": f"校验失败：{error_msg}"
                     }]
                 }
 
@@ -560,10 +560,10 @@ class IntentParserNode:
             logger.exception("intent_parser_failed error=%s", e)
             return {
                 **state,
-                "error": f"??????: {str(e)}",
+                "error": f"意图解析失败: {str(e)}",
                 "error_node": NODE_INTENT_PARSER,
                 "history": history + [{
                     "node": NODE_INTENT_PARSER,
-                    "result": f"??: {str(e)}"
+                    "result": f"错误：{str(e)}"
                 }]
             }

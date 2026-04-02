@@ -8,6 +8,7 @@ import os
 import re
 import json
 import logging
+import time
 from functools import lru_cache
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -103,9 +104,13 @@ def _normalize_alias_key(alias: str) -> str:
 
 
 def _get_session_state(session_id: str) -> Dict[str, Any]:
-    state = SESSION_STATE.setdefault(session_id, {"device_aliases": {}, "updated_at": None, "last_user_query": None})
+    state = SESSION_STATE.setdefault(
+        session_id,
+        {"device_aliases": {}, "updated_at": None, "last_user_query": None, "confirmed_project": None},
+    )
     state.setdefault("device_aliases", {})
     state.setdefault("last_user_query", None)
+    state.setdefault("confirmed_project", None)
     state["updated_at"] = datetime.now().isoformat()
     return state
 
@@ -127,7 +132,23 @@ def _clear_session_scope(session_id: str) -> int:
     alias_map = state.setdefault("device_aliases", {})
     count = len(alias_map)
     alias_map.clear()
+    state["confirmed_project"] = None
     return count
+
+
+def _build_confirmed_project_payload(payload: Optional[dict]) -> Optional[dict]:
+    if not isinstance(payload, dict):
+        return None
+    project_id = str(payload.get("project_id") or payload.get("id") or "").strip()
+    project_name = str(payload.get("project_name") or "").strip()
+    project_code_name = str(payload.get("project_code_name") or payload.get("code_name") or "").strip()
+    if not project_id and not project_name and not project_code_name:
+        return None
+    return {
+        "project_id": project_id,
+        "project_name": project_name,
+        "project_code_name": project_code_name,
+    }
 
 
 SCOPE_CLEAR_ALL_PATTERNS = [
@@ -369,13 +390,21 @@ def _extract_alias_action(alias_confirmation: Optional[dict]) -> Optional[dict]:
     if not isinstance(alias_confirmation, dict):
         return None
     action = str(alias_confirmation.get("action") or "").strip().lower()
-    if action not in {"reset_alias", "clear_scope", "switch_project"}:
+    if action not in {"reset_alias", "clear_scope", "switch_project", "confirm_project_scope"}:
         return None
     payload = {"action": action}
     if alias_confirmation.get("alias"):
         payload["alias"] = str(alias_confirmation.get("alias") or "").strip()
     if alias_confirmation.get("project_hint"):
         payload["project_hint"] = str(alias_confirmation.get("project_hint") or "").strip()
+    if alias_confirmation.get("keyword"):
+        payload["keyword"] = str(alias_confirmation.get("keyword") or "").strip()
+    if alias_confirmation.get("project_id"):
+        payload["project_id"] = str(alias_confirmation.get("project_id") or "").strip()
+    if alias_confirmation.get("project_name"):
+        payload["project_name"] = str(alias_confirmation.get("project_name") or "").strip()
+    if alias_confirmation.get("project_code_name"):
+        payload["project_code_name"] = str(alias_confirmation.get("project_code_name") or "").strip()
     if alias_confirmation.get("original_question"):
         payload["original_question"] = str(alias_confirmation.get("original_question") or "").strip()
     return payload
@@ -533,7 +562,7 @@ def _extract_alias_confirmation_from_message(message: str) -> Optional[dict]:
     return None
 
 
-def _create_chat_agent(alias_memory: Optional[Dict[str, Any]] = None):
+def _create_chat_agent(alias_memory: Optional[Dict[str, Any]] = None, confirmed_project: Optional[Dict[str, Any]] = None):
     orchestrator_type = str(getattr(config.agent, "orchestrator_type", "react") or "react").strip().lower()
     if orchestrator_type == "dag":
         logger.info("chat.agent.create orchestrator=dag")
@@ -544,6 +573,7 @@ def _create_chat_agent(alias_memory: Optional[Dict[str, Any]] = None):
             cache_manager=None,
             compressor=compressor,
             alias_memory=alias_memory,
+            confirmed_project=confirmed_project,
         )
 
     logger.info("chat.agent.create orchestrator=react")
@@ -564,6 +594,7 @@ def _prepare_chat_context(request: "ChatRequest") -> Dict[str, Any]:
     history = request.history or []
     learned_aliases: List[dict] = []
     session_state = _get_session_state(session_id)
+    confirmed_project = _build_confirmed_project_payload(session_state.get("confirmed_project"))
 
     scope_action = _extract_alias_action(request.alias_confirmation) or _extract_scope_control_command(request.message)
     if scope_action:
@@ -572,6 +603,7 @@ def _prepare_chat_context(request: "ChatRequest") -> Dict[str, Any]:
 
         if scope_action.get("action") == "clear_scope":
             _clear_session_scope(session_id)
+            confirmed_project = None
         elif scope_action.get("action") == "reset_alias":
             _clear_session_alias(session_id, scope_action.get("alias"))
         elif scope_action.get("action") == "switch_project":
@@ -602,8 +634,20 @@ def _prepare_chat_context(request: "ChatRequest") -> Dict[str, Any]:
                 effective_message = original_question or request.message
             elif original_question:
                 effective_message = f"{project_hint} {original_question}".strip()
+        elif scope_action.get("action") == "confirm_project_scope":
+            confirmed_project = _build_confirmed_project_payload(
+                {
+                    "project_id": scope_action.get("project_id"),
+                    "project_name": scope_action.get("project_name"),
+                    "project_code_name": scope_action.get("project_code_name"),
+                }
+            )
+            session_state["confirmed_project"] = confirmed_project
+            effective_message = original_question or request.message
 
         session_state = _get_session_state(session_id)
+        if scope_action.get("action") != "confirm_project_scope" and confirmed_project is None:
+            confirmed_project = _build_confirmed_project_payload(session_state.get("confirmed_project"))
         if effective_message and effective_message != request.message:
             session_state["last_user_query"] = effective_message
         return {
@@ -611,6 +655,7 @@ def _prepare_chat_context(request: "ChatRequest") -> Dict[str, Any]:
             "history": history,
             "effective_message": effective_message,
             "alias_memory": session_state.get("device_aliases", {}),
+            "confirmed_project": confirmed_project,
             "learned_aliases": learned_aliases,
         }
 
@@ -638,7 +683,63 @@ def _prepare_chat_context(request: "ChatRequest") -> Dict[str, Any]:
         "history": history,
         "effective_message": effective_message,
         "alias_memory": session_state.get("device_aliases", {}),
+        "confirmed_project": _build_confirmed_project_payload(session_state.get("confirmed_project")),
         "learned_aliases": learned_aliases,
+    }
+
+
+def _build_confirm_project_devices_response(project_payload: Optional[dict]) -> Optional[dict]:
+    project = _build_confirmed_project_payload(project_payload)
+    project_id = str((project or {}).get("project_id") or "").strip()
+    if not project_id:
+        return None
+    devices = metadata_engine.get_devices_by_project(project_id)
+    rows: List[dict] = []
+    tg_set = set()
+    for device in devices or []:
+        payload = device.to_dict() if hasattr(device, "to_dict") else {
+            "device": getattr(device, "device", ""),
+            "name": getattr(device, "name", ""),
+            "device_type": getattr(device, "device_type", ""),
+            "project_id": getattr(device, "project_id", ""),
+            "project_name": getattr(device, "project_name", None),
+            "project_code_name": getattr(device, "project_code_name", None),
+            "tg": getattr(device, "tg", None),
+        }
+        rows.append(payload)
+        tg_value = str(payload.get("tg") or "").strip()
+        if tg_value:
+            tg_set.add(tg_value)
+    resolved_scope = _finalize_resolved_scope_payload(
+        title="当前确认作用域",
+        items=[
+            {
+                "device": row.get("device"),
+                "name": row.get("name"),
+                "project_id": row.get("project_id"),
+                "project_name": row.get("project_name"),
+                "project_code_name": row.get("project_code_name"),
+                "tg": row.get("tg"),
+                "alias": None,
+                "source": "confirmed_project_scope",
+                "can_switch": False,
+            }
+            for row in rows
+        ],
+        tg_count=len(tg_set),
+    )
+    return {
+        "success": True,
+        "response": f"已找到 {len(rows)} 个相关设备，请查看下表。" if rows else "当前项目下暂无设备。",
+        "intent_type": "data_query",
+        "show_table": bool(rows),
+        "table_type": "devices" if rows else "",
+        "query_params": None,
+        "resolved_scope": resolved_scope,
+        "projects": None,
+        "devices": rows,
+        "clarification_required": False,
+        "clarification_candidates": None,
     }
 
 
@@ -1483,6 +1584,7 @@ async def chat_stream(request: ChatRequest):
         history = context["history"]
         effective_message = context["effective_message"]
         alias_memory = context["alias_memory"]
+        confirmed_project = context["confirmed_project"]
         learned_aliases = context["learned_aliases"]
         user_id = chat_memory_service.resolve_chat_user_id(request.user_id, session_id)
         intent_type = chat_memory_service.classify_chat_intent(request.message)
@@ -1508,6 +1610,32 @@ async def chat_stream(request: ChatRequest):
             learned_alias_count=len(learned_aliases),
             session_alias_count=len(alias_memory or {}),
         )
+
+        project_scope_action = _extract_alias_action(request.alias_confirmation)
+        if isinstance(project_scope_action, dict) and project_scope_action.get("action") == "confirm_project_scope":
+            handled = _build_confirm_project_devices_response(project_scope_action)
+            if handled:
+                step_name = "确认项目并列出设备"
+                step_started_at = round(time.time() * 1000, 2)
+                yield f"data: {json.dumps({'type': 'step_start', 'step': step_name, 'node_name': 'project_scope_confirm', 'timestamp_ms': step_started_at}, ensure_ascii=False)}\n\n"
+                chat_memory_service.record_chat_message(
+                    session_id=session_id,
+                    user_id=user_id,
+                    role="assistant",
+                    message=handled.get("response") or "",
+                    intent_type="data_query",
+                    message_meta=handled,
+                )
+                yield f"data: {json.dumps({'type': 'step_done', 'step': step_name, 'node_name': 'project_scope_confirm', 'info': handled.get('response') or '', 'duration_ms': 0}, ensure_ascii=False)}\n\n"
+                complete_payload = {
+                    "type": "complete",
+                    **handled,
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "original_question": effective_message,
+                }
+                yield f"data: {json.dumps(complete_payload, ensure_ascii=False)}\n\n"
+                return
 
         try:
             handled = chat_memory_service.handle_memory_command(
@@ -1574,7 +1702,7 @@ async def chat_stream(request: ChatRequest):
                 memory_apply.get("invalid_items") or [],
             )
 
-            agent = _create_chat_agent(alias_memory=alias_memory)
+            agent = _create_chat_agent(alias_memory=alias_memory, confirmed_project=confirmed_project)
             message_with_history = _build_message_with_history(effective_message, history)
 
             for event in agent.run_with_progress(message_with_history):
@@ -1767,6 +1895,7 @@ async def chat(request: ChatRequest):
     history = context["history"]
     effective_message = context["effective_message"]
     alias_memory = context["alias_memory"]
+    confirmed_project = context["confirmed_project"]
     learned_aliases = context["learned_aliases"]
     user_id = chat_memory_service.resolve_chat_user_id(request.user_id, session_id)
     intent_type = chat_memory_service.classify_chat_intent(request.message)
@@ -1791,6 +1920,25 @@ async def chat(request: ChatRequest):
         learned_alias_count=len(learned_aliases),
         session_alias_count=len(alias_memory or {}),
     )
+
+    project_scope_action = _extract_alias_action(request.alias_confirmation)
+    if isinstance(project_scope_action, dict) and project_scope_action.get("action") == "confirm_project_scope":
+        handled = _build_confirm_project_devices_response(project_scope_action)
+        if handled:
+            chat_memory_service.record_chat_message(
+                session_id=session_id,
+                user_id=user_id,
+                role="assistant",
+                message=handled.get("response") or "",
+                intent_type="data_query",
+                message_meta=handled,
+            )
+            return {
+                "request_id": request_id,
+                "session_id": session_id,
+                "original_question": effective_message,
+                **handled,
+            }
 
     try:
         handled = chat_memory_service.handle_memory_command(
@@ -1845,7 +1993,7 @@ async def chat(request: ChatRequest):
         if memory_action_result is None:
             memory_action_result = memory_effect_payload
 
-        agent = _create_chat_agent(alias_memory=alias_memory)
+        agent = _create_chat_agent(alias_memory=alias_memory, confirmed_project=confirmed_project)
 
         steps = []
         response_text = ""

@@ -744,10 +744,10 @@
                         : (Array.isArray(meta.query_params?.projects) ? meta.query_params.projects : []);
                     if (projects.length) {
                         replayTableData = {
-                            headers: ['ID', '????'],
+                            headers: ['ID', '项目名称'],
                             rows: projects.map(p => ({
                                 'ID': p.id || '-',
-                                '????': p.project_name || '-',
+                                '项目名称': p.project_name || '-',
                             })),
                             total_count: projects.length,
                             has_more: false,
@@ -755,11 +755,11 @@
                     }
                 } else if (tableType === 'devices' && Array.isArray(meta.devices)) {
                     replayTableData = {
-                        headers: ['????', '????', '????'],
+                        headers: ['设备代号', '设备名称', '所属项目'],
                         rows: meta.devices.map(d => ({
-                            '????': d.device || d.device_code || '-',
-                            '????': d.name || '-',
-                            '????': d.project_name || '-',
+                            '设备代号': d.device || d.device_code || '-',
+                            '设备名称': d.name || '-',
+                            '所属项目': d.project_name || '-',
                         })),
                         total_count: meta.devices.length,
                         has_more: false,
@@ -770,11 +770,11 @@
                         : (Array.isArray(meta.query_params?.stats) ? meta.query_params.stats : []);
                     if (projectStats.length) {
                         replayTableData = {
-                            headers: ['??', '????', '????'],
+                            headers: ['排名', '项目名称', '设备数量'],
                             rows: projectStats.map((s, index) => ({
-                                '??': index + 1,
-                                '????': s.project_name || '-',
-                                '????': s.device_count || 0,
+                                '排名': index + 1,
+                                '项目名称': s.project_name || '-',
+                                '设备数量': s.device_count || 0,
                             })),
                             total_count: projectStats.length,
                             has_more: false,
@@ -2084,7 +2084,9 @@ function askQuestion(question) {
         }
 
         function buildClarificationCandidateCardHtml(messageId, groupIndex, candidate, candidateIndex) {
+            const candidateKind = String(candidate.candidate_kind || '').trim();
             const projectName = candidate.project_name || candidate.project_code_name || '-';
+            const projectCode = candidate.project_code_name || candidate.name || '';
             const matchReason = buildClarificationReason(candidate);
             const matchType = String(candidate.match_type || '').trim();
             const retrievalSource = String(candidate.retrieval_source || '').trim();
@@ -2093,6 +2095,11 @@ function askQuestion(question) {
             const isAggregateAllOption = matchType === 'aggregate_all_option' || String(candidate.scope_mode || '').trim() === 'aggregate_all';
             const hasSemanticScore = !isExactCodeConflict && (matchType === 'semantic' || retrievalSource === 'semantic' || retrievalSource === 'merged') && Number.isFinite(Number(candidate.match_score));
             const isRecommended = Boolean(candidate.is_recommended);
+            const projectTitle = candidateKind === 'project'
+                ? ((projectCode && projectCode !== '项目候选' && projectCode !== projectName)
+                    ? `${projectName}（${projectCode}）`
+                    : projectName)
+                : (candidate.device || '-');
             const retrievalSourceMap = {
                 lexical: '\u8bcd\u6cd5\u53ec\u56de',
                 semantic: '\u8bed\u4e49\u53ec\u56de',
@@ -2124,15 +2131,15 @@ function askQuestion(question) {
                 <div class="rounded-lg border ${isRecommended ? 'border-emerald-300 bg-emerald-50/40' : 'border-gray-200'} p-3 transition-colors">
                     <div class="flex items-start justify-between gap-3 flex-wrap">
                         <div class="min-w-0 flex-1">
-                            <div class="text-sm font-medium text-gray-900 break-all">${escapeHtml(candidate.device || '-')}</div>
-                            <div class="text-sm text-gray-700 break-all">${escapeHtml(candidate.name || '未命名设备')}</div>
-                            <div class="text-xs text-gray-500 mt-1">${escapeHtml(projectName)}</div>
+                            <div class="text-sm font-medium text-gray-900 break-all">${escapeHtml(projectTitle)}</div>
+                            <div class="text-sm text-gray-700 break-all">${escapeHtml(candidateKind === 'project' ? ((candidate.name && candidate.name !== '项目候选' && candidate.name !== candidate.project_code_name) ? candidate.name : '项目候选') : (candidate.name || '未命名设备'))}</div>
+                            <div class="text-xs text-gray-500 mt-1">${escapeHtml(candidateKind === 'project' ? `项目ID：${candidate.project_id || '-'}` : projectName)}</div>
                             ${metaText ? `<div class="text-[11px] text-gray-500 mt-1">${escapeHtml(metaText)}</div>` : ''}
                             ${matchReason && !isExactCodeConflict ? `<div class="text-xs text-amber-700 mt-2">${escapeHtml(matchReason)}</div>` : ''}
                         </div>
                         <div class="flex flex-col items-end gap-2">
                             ${badges.join('')}
-                            <button onclick="confirmClarificationCandidate('${messageId}', ${groupIndex}, ${candidateIndex})" class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-700">${isAggregateAllOption ? '选全部' : '选这个设备'}</button>
+                            <button onclick="confirmClarificationCandidate('${messageId}', ${groupIndex}, ${candidateIndex})" class="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs hover:bg-indigo-700">${isAggregateAllOption ? '选全部' : (candidateKind === 'project' ? '选这个项目' : '选这个设备')}</button>
                         </div>
                     </div>
                 </div>
@@ -2144,6 +2151,7 @@ function askQuestion(question) {
             const totalCount = candidates.length;
             const totalPages = Math.max(1, Math.ceil(totalCount / CLARIFICATION_PAGE_SIZE));
             const state = getClarificationUiState(messageId, groupIndex);
+            const candidateKind = String(group.candidate_kind || '').trim();
             const page = Math.min(Math.max(Number(state.page) || 1, 1), totalPages);
             state.page = page;
 
@@ -2153,7 +2161,7 @@ function askQuestion(question) {
             const visibleEnd = pageStartIndex + pageCandidates.length;
 
             return `
-                <div class="text-xs text-gray-500">\u5f85\u786e\u8ba4\u5173\u952e\u8bcd</div>
+                <div class="text-xs text-gray-500">${candidateKind === 'project' ? '待确认项目关键词' : '\u5f85\u786e\u8ba4\u5173\u952e\u8bcd'}</div>
                 <div class="mt-1 text-sm font-semibold text-gray-800">${escapeHtml(group.keyword || `\u76ee\u6807 ${groupIndex + 1}`)}</div>
                 <div class="mt-2 flex items-center justify-between gap-3 flex-wrap text-xs text-amber-700">
                     <span>\u5171 ${totalCount} \u4e2a\u5019\u9009</span>
@@ -2230,6 +2238,21 @@ function askQuestion(question) {
                 : `${aggregatePhrase}：${question}`;
         }
 
+        function buildProjectScopedQuestion(originalQuestion, alias, projectName) {
+            const selectedProjectName = String(projectName || '').trim();
+            const question = String(originalQuestion || '').trim();
+            const originalAlias = String(alias || '').trim();
+            if (!selectedProjectName) return question || originalAlias;
+            if (!question) return selectedProjectName;
+            if (originalAlias && question.includes(originalAlias)) {
+                return question.replace(originalAlias, selectedProjectName);
+            }
+            if (question.includes(selectedProjectName)) {
+                return question;
+            }
+            return `${selectedProjectName} ${question}`.trim();
+        }
+
         function confirmClarificationCandidate(messageId, groupIndex, candidateIndex) {
             const groups = window['clarification_' + messageId] || [];
             const group = groups[groupIndex];
@@ -2241,12 +2264,54 @@ function askQuestion(question) {
             const deviceCode = candidate.device || '';
             const deviceName = candidate.name || '';
             const projectName = candidate.project_name || candidate.project_code_name || '';
+            const candidateKind = String(candidate.candidate_kind || group.candidate_kind || '').trim();
             const isAggregateAllOption = String(candidate.match_type || '').trim() === 'aggregate_all_option' || String(candidate.scope_mode || '').trim() === 'aggregate_all';
             const details = [];
             if (deviceName) details.push(deviceName);
             if (projectName) details.push(`项目：${projectName}`);
             const detailText = details.length ? `（${details.join('，')}）` : '';
             const originalQuestion = String(meta && (meta.original_question || meta.query_params?.user_query) || '').trim();
+            if (candidateKind === 'project') {
+                const selectedProjectName = candidate.project_name || candidate.project_code_name || deviceCode || alias;
+                const selectedProjectCodeName = candidate.project_code_name || '';
+                const selectedProjectLabel = selectedProjectCodeName && selectedProjectCodeName !== '项目候选'
+                    ? `${selectedProjectName}（${selectedProjectCodeName}）`
+                    : selectedProjectName;
+                const displayMessage = `已确认项目：${selectedProjectLabel}，继续查询原问题`;
+                sendMessage(originalQuestion || selectedProjectName, {
+                    displayMessage,
+                    aliasConfirmation: {
+                        action: 'confirm_project_scope',
+                        alias,
+                        keyword: alias,
+                        project_id: candidate.project_id,
+                        project_name: candidate.project_name,
+                        project_code_name: candidate.project_code_name,
+                        original_question: originalQuestion,
+                    },
+                    skipChartFollowUp: true,
+                });
+                return;
+            }
+            if (candidateKind === 'project') {
+                const selectedProjectName = candidate.project_name || candidate.project_code_name || deviceCode || alias;
+                const selectedProjectToken = candidate.project_code_name && candidate.project_code_name !== '项目候选'
+                    ? `${selectedProjectName}${candidate.project_code_name}`
+                    : selectedProjectName;
+                const displayMessage = `已确认项目：${selectedProjectName}，继续查询原问题`;
+                const nextMessage = buildProjectScopedQuestion(originalQuestion, alias, selectedProjectToken);
+                sendMessage(nextMessage, {
+                    displayMessage,
+                    aliasConfirmation: {
+                        action: 'query_once',
+                        alias_text: alias,
+                        canonical_text: selectedProjectToken,
+                        original_question: originalQuestion,
+                    },
+                    skipChartFollowUp: true,
+                });
+                return;
+            }
             if (isAggregateAllOption) {
                 const displayMessage = `已切换为跨项目汇总：${alias}${detailText}，继续查询原问题`;
                 const nextMessage = buildAggregateScopeQuestion(originalQuestion, alias) || `汇总所有 ${alias}`;
@@ -2543,10 +2608,10 @@ function askQuestion(question) {
                 <div class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-3">
                     <div class="flex items-center justify-between gap-3 flex-wrap">
                         <div>
-                            <div class="text-sm font-semibold text-amber-900">\u5019\u9009\u8bbe\u5907</div>
+                            <div class="text-sm font-semibold text-amber-900">${groups.some(group => String(group.candidate_kind || '').trim() === 'project') ? '\u5019\u9009\u9879\u76ee' : '\u5019\u9009\u8bbe\u5907'}</div>
                             <div class="text-xs text-amber-700">\u547d\u4e2d\u4e0d\u786e\u5b9a\uff0c\u8bf7\u5148\u786e\u8ba4\u540e\u518d\u7ee7\u7eed\u67e5\u8be2</div>
                         </div>
-                        <div class="text-xs text-amber-700">\u6bcf\u9875 10 \u6761\uff0c\u70b9\u51fb\u201c\u9009\u8fd9\u4e2a\u8bbe\u5907\u201d\u4f1a\u81ea\u52a8\u7ee7\u7eed\u67e5\u8be2</div>
+                        <div class="text-xs text-amber-700">\u6bcf\u9875 10 \u6761\uff0c\u70b9\u51fb\u5019\u9009\u9879\u540e\u4f1a\u81ea\u52a8\u7ee7\u7eed\u539f\u95ee\u9898</div>
                     </div>
                     ${groups.map((group, groupIndex) => {
                         const state = getClarificationUiState(messageId, groupIndex);

@@ -256,7 +256,7 @@ def test_focused_result_inherits_analysis_scope_label() -> None:
     ]
     analysis = {
         "mode": "single",
-        "metric": "??",
+        "metric": "ua",
         "unit": "V",
         "analysis_scope_label": "\u6309\u4e09\u76f8\u8054\u5408\u5206\u6790",
     }
@@ -264,7 +264,7 @@ def test_focused_result_inherits_analysis_scope_label() -> None:
     result = _build_focused_result(
         records,
         analysis,
-        "a2_b1 ??????????",
+        "a2_b1 三相电压哪个时间点最高",
         "u_line",
         query_plan={
             "query_mode": "ranked_timepoints",

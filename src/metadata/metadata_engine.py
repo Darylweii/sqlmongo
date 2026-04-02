@@ -10,6 +10,7 @@ Expected table shape:
 """
 
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import List, Optional, Any, Tuple
 import logging
 import re
@@ -27,12 +28,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DeviceInfo:
     """Device information data class."""
-    device: str  # ???? (?? MongoDB ? device ??)
-    name: str  # ????
-    device_type: str  # ????
-    project_id: str  # ??ID
-    project_name: Optional[str] = None  # ????
-    project_code_name: Optional[str] = None  # ????
+    device: str  # 设备代号（对应 MongoDB 中的 device 字段）
+    name: str  # 设备名称
+    device_type: str  # 设备类型
+    project_id: str  # 项目 ID
+    project_name: Optional[str] = None  # 项目名称
+    project_code_name: Optional[str] = None  # 项目代号
     tg: Optional[str] = None
     score: float = 0.0
     matched_fields: List[str] = field(default_factory=list)
@@ -368,10 +369,107 @@ class MetadataEngine:
 
         except SQLAlchemyError as e:
             logger.error(f"Database query failed: {e}")
-            raise DatabaseConnectionError(f"???????: {str(e)}")
+            raise DatabaseConnectionError(f"数据库查询失败: {str(e)}")
         except Exception as e:
             logger.error(f"Unexpected error during search: {e}")
-            raise MetadataEngineError(f"?????????: {str(e)}")
+            raise MetadataEngineError(f"元数据搜索时发生未知错误: {str(e)}")
+
+    def search_device_suggestions(self, keyword: str, limit: int = 10, project_id: Optional[str] = None) -> List[dict]:
+        """Search low-confidence typo-like device suggestions."""
+        normalized_keyword = self._compact_match_text(keyword)
+        if not normalized_keyword:
+            return []
+
+        project_filter = str(project_id or "").strip()
+
+        def _fuzzy_score(candidate_value: Optional[str]) -> tuple[float, str]:
+            compact_value = self._compact_match_text(candidate_value)
+            if not compact_value:
+                return 0.0, ""
+            candidate_tokens = self._extract_match_tokens(candidate_value or "")
+            if compact_value not in candidate_tokens:
+                candidate_tokens.append(compact_value)
+
+            keyword_chars = {char for char in normalized_keyword if char.strip()}
+            best_score = 0.0
+            best_token = ""
+            for token in candidate_tokens:
+                compact_token = self._compact_match_text(token)
+                if not compact_token:
+                    continue
+                ratio = SequenceMatcher(None, normalized_keyword, compact_token).ratio()
+                token_chars = {char for char in compact_token if char.strip()}
+                overlap = len(keyword_chars & token_chars) / max(len(keyword_chars), 1) if keyword_chars else 0.0
+                anchored_bonus = 0.0
+                if compact_token and normalized_keyword and compact_token[0] == normalized_keyword[0]:
+                    anchored_bonus += 0.08
+                if compact_token and normalized_keyword and compact_token[-1] == normalized_keyword[-1]:
+                    anchored_bonus += 0.05
+                blended = max(ratio, overlap * 0.82 + anchored_bonus)
+                if blended > best_score:
+                    best_score = blended
+                    best_token = compact_token
+
+            if best_score >= 0.9:
+                return 86.0, best_token
+            if best_score >= 0.78:
+                return 72.0 + best_score * 10.0, best_token
+            if best_score >= 0.62:
+                return 56.0 + best_score * 10.0, best_token
+            if len(normalized_keyword) <= 4 and best_score >= 0.45:
+                return 42.0 + best_score * 10.0, best_token
+            return 0.0, best_token
+
+        suggestions: dict[tuple, dict] = {}
+        try:
+            for device in self._load_device_catalog():
+                if project_filter and str(device.project_id or "").strip() != project_filter:
+                    continue
+
+                field_candidates = {
+                    "name": device.name,
+                    "device_type": device.device_type,
+                    "device": device.device,
+                }
+                best_field = ""
+                best_score = 0.0
+                best_token = ""
+                for field_name, field_value in field_candidates.items():
+                    score, token = _fuzzy_score(field_value)
+                    if score > best_score:
+                        best_score = score
+                        best_field = field_name
+                        best_token = token
+
+                if best_score <= 0:
+                    continue
+
+                dedupe_key = (device.device, device.project_id, device.name, device.tg)
+                current = suggestions.get(dedupe_key)
+                payload = device.to_dict()
+                payload.update({
+                    "match_score": round(best_score, 2),
+                    "matched_fields": [best_field] if best_field else [],
+                    "match_reason": f"{best_field or 'name'} typo_fuzzy_match:{best_token}" if best_token else "device fuzzy suggestion",
+                    "retrieval_source": "lexical",
+                    "match_type": "fuzzy_typo",
+                })
+                if current is None or float(payload["match_score"]) > float(current.get("match_score") or 0.0):
+                    suggestions[dedupe_key] = payload
+
+            ranked = sorted(
+                suggestions.values(),
+                key=lambda item: (
+                    -float(item.get("match_score") or 0.0),
+                    str(item.get("device") or ""),
+                    str(item.get("name") or ""),
+                    str(item.get("project_id") or ""),
+                ),
+            )
+            return ranked[: max(1, min(int(limit or 10), 20))]
+        except Exception as e:
+            logger.warning("device suggestion search failed: %s", e)
+            return []
 
     def get_devices_by_project(self, project_id: str) -> List[DeviceInfo]:
         """
@@ -521,7 +619,8 @@ class MetadataEngine:
                     projects.append({
                         "id": row.id,
                         "project_name": row.project_name,
-                        "code_name": row.project_code_name
+                        "project_code_name": row.project_code_name,
+                        "code_name": row.project_code_name,
                     })
                 return projects
                 
@@ -531,6 +630,79 @@ class MetadataEngine:
         except SQLAlchemyError as e:
             logger.error(f"Database query failed: {e}")
             raise DatabaseConnectionError(f"数据库查询失败: {str(e)}")
+
+    def search_projects(self, keyword: str, limit: int = 10) -> List[dict]:
+        """Search projects by fuzzy name / code-name matching."""
+        normalized_keyword = "".join(str(keyword or "").strip().lower().split())
+        if not normalized_keyword:
+            return []
+
+        def _normalize(value: object) -> str:
+            return "".join(str(value or "").strip().lower().split())
+
+        def _score(keyword_text: str, candidate_text: str) -> float:
+            if not keyword_text or not candidate_text:
+                return 0.0
+            if keyword_text == candidate_text:
+                return 100.0
+            if keyword_text in candidate_text:
+                return 88.0
+            ratio = SequenceMatcher(None, keyword_text, candidate_text).ratio()
+            if ratio >= 0.85:
+                return 80.0 + ratio * 10.0
+            if ratio >= 0.65:
+                return 60.0 + ratio * 15.0
+            if ratio >= 0.45:
+                return 35.0 + ratio * 20.0
+            keyword_chars = {char for char in keyword_text if char.strip()}
+            candidate_chars = {char for char in candidate_text if char.strip()}
+            if keyword_chars and candidate_chars:
+                overlap_ratio = len(keyword_chars & candidate_chars) / max(len(keyword_chars), 1)
+                if overlap_ratio >= 0.75:
+                    return 52.0 + overlap_ratio * 18.0
+                if overlap_ratio >= 0.5:
+                    return 36.0 + overlap_ratio * 18.0
+            return 0.0
+
+        results: List[dict] = []
+        for project in self.list_projects():
+            project_name = str(project.get("project_name") or "").strip()
+            project_code_name = str(project.get("project_code_name") or project.get("code_name") or "").strip()
+            normalized_name = _normalize(project_name)
+            normalized_code_name = _normalize(project_code_name)
+            normalized_combined = _normalize(f"{project_name}{project_code_name}")
+            name_score = _score(normalized_keyword, normalized_name)
+            code_score = _score(normalized_keyword, normalized_code_name)
+            combined_score = _score(normalized_keyword, normalized_combined)
+            best_score = max(name_score, code_score, combined_score)
+            if best_score <= 0:
+                continue
+            if combined_score >= name_score and combined_score >= code_score:
+                match_reason = "项目名称+代号组合匹配"
+                matched_field = "project_compound"
+            elif name_score >= code_score:
+                match_reason = "项目名称模糊匹配"
+                matched_field = "project_name"
+            else:
+                match_reason = "项目代号模糊匹配"
+                matched_field = "project_code_name"
+            results.append({
+                "id": project.get("id"),
+                "project_name": project_name,
+                "project_code_name": project_code_name,
+                "code_name": project_code_name,
+                "match_score": round(best_score, 2),
+                "match_reason": match_reason,
+                "matched_fields": [matched_field],
+            })
+        results.sort(
+            key=lambda item: (
+                -float(item.get("match_score") or 0.0),
+                str(item.get("project_name") or ""),
+                str(item.get("project_code_name") or ""),
+            )
+        )
+        return results[: max(1, min(int(limit or 10), 20))]
     
     def get_project_device_stats(self) -> List[dict]:
         """

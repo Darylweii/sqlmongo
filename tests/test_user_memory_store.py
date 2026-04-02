@@ -54,13 +54,13 @@ def test_chat_history_preserves_message_meta(tmp_path: Path) -> None:
         session_id="s-meta",
         user_id="u-meta",
         role="assistant",
-        message="??? 2 ????????????",
+        message="已找到 2 个相关设备，请查看下表。",
         intent_type="data_query",
         message_meta={
-            "response": "??? 2 ????????????",
+            "response": "已找到 2 个相关设备，请查看下表。",
             "show_table": True,
             "table_type": "devices",
-            "devices": [{"device": "a1_b9", "name": "B2?", "project_name": "??A"}],
+            "devices": [{"device": "a1_b9", "name": "B2柜", "project_name": "项目A"}],
         },
     )
 

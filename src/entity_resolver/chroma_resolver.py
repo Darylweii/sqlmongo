@@ -336,7 +336,10 @@ class ChromaEntityResolver:
             return False
         if DEVICE_CODE_PATTERN.fullmatch(compact):
             return True
-        return not any(token in compact for token in ("??", "??", "??", "??", "??", "??", "top", "?", "??"))
+        return not any(
+            token in compact
+            for token in ("多少", "什么", "哪些", "有没有", "怎么", "为何", "top", "排名", "对比")
+        )
 
     def _has_strong_lexical_candidates(
         self,

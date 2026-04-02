@@ -119,7 +119,11 @@ class InsightEngine:
             "unit": unit,
             "analysis_scope_mode": analysis_scope_mode,
             "analysis_scope_label": analysis_scope_label,
-            "headline": (f"{analysis_scope_label}?{metric_name}???{trend}????????{volatility_level}" if analysis_scope_label else f"{metric_name}???{trend}????????{volatility_level}"),
+            "headline": (
+                f"{analysis_scope_label}的{metric_name}呈{trend}趋势，整体波动{volatility_level}"
+                if analysis_scope_label
+                else f"{metric_name}呈{trend}趋势，整体波动{volatility_level}"
+            ),
             "summary_cards": [
                 {"label": "均值", "value": cls._format_number(statistics.get("avg"), unit), "detail": f"共 {statistics.get('count', len(normalized))} 条记录"},
                 {"label": "趋势", "value": trend, "detail": f"阶段变化 {change_rate}%"},

@@ -5,6 +5,8 @@ import uvicorn
 
 
 def _ensure_utf8_output() -> None:
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    os.environ.setdefault("PYTHONUTF8", "1")
     if os.name == "nt":
         os.system("chcp 65001 > nul")
     if hasattr(sys.stdout, "reconfigure"):

@@ -29,8 +29,8 @@ class _FakeMetadataEngine:
     def search_devices(self, keyword):
         assert keyword == "a1_b9"
         return [
-            _Device("a1_b9", "B2?", "1", "??????????????", "ceec"),
-            _Device("a1_b9", "601-612", "2", "??????", "plyh"),
+            _Device("a1_b9", "B2柜", "1", "中国能建集团数据机房监控项目", "ceec"),
+            _Device("a1_b9", "601-612", "2", "平陆运河项目", "plyh"),
         ], False
 
     def list_projects(self):

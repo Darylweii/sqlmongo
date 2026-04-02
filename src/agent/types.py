@@ -37,6 +37,7 @@ class GraphState(TypedDict):
     # 输入
     user_query: str
     alias_memory: Optional[Dict[str, Any]]
+    confirmed_project: Optional[Dict[str, Any]]
     
     # Intent Parser 输出
     intent: Optional[Dict[str, Any]]
@@ -51,7 +52,7 @@ class GraphState(TypedDict):
     resolved_devices: Optional[List[Dict[str, Any]]]
     clarification_required: Optional[bool]
     clarification_candidates: Optional[List[Dict[str, Any]]]
-    comparison_device_groups: Optional[Dict[str, List[str]]]  # ?? -> ??????
+    comparison_device_groups: Optional[Dict[str, List[str]]]  # 比较目标 -> 设备编码列表
     comparison_scope_groups: Optional[Dict[str, List[Dict[str, Any]]]]
     
     collections: Optional[List[str]]

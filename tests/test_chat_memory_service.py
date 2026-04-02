@@ -88,3 +88,19 @@ def test_chat_memory_service_defaults_user_id_to_anonymous(tmp_path: Path) -> No
     assert service.resolve_chat_user_id(None, "session-1") == "anonymous-user"
     assert service.resolve_chat_user_id("user-1234abcd", "session-1") == "anonymous-user"
     assert service.resolve_chat_user_id("u1", "session-1") == "u1"
+
+
+def test_chat_memory_service_query_once_rewrites_ambiguous_project_alias(tmp_path: Path) -> None:
+    service = _build_service(tmp_path)
+
+    rewritten = service.apply_query_once_alias(
+        {
+            "action": "query_once",
+            "alias_text": "测试项目",
+            "canonical_text": "测试项目111",
+            "original_question": "测试项目有哪些设备",
+        },
+        "测试项目有哪些设备",
+    )
+
+    assert rewritten == "测试项目111有哪些设备"

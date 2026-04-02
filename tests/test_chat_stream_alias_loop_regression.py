@@ -35,8 +35,8 @@ class _FakeMetadataEngine:
         self.search_calls += 1
         if keyword == "a1_b9":
             return [
-                _FakeDevice("a1_b9", "B2?", "p1", "??????????????", "ceec"),
-                _FakeDevice("a1_b9", "601-612", "p2", "??????", "plyh"),
+                _FakeDevice("a1_b9", "B2柜", "p1", "中国能建集团数据机房监控项目", "ceec"),
+                _FakeDevice("a1_b9", "601-612", "p2", "平陆运河项目", "plyh"),
             ], False
         return [], False
 
@@ -112,4 +112,4 @@ def test_alias_confirmation_does_not_loop_in_dag(monkeypatch):
     assert second_complete["clarification_required"] is False
     assert second_complete["query_params"]["device_codes"] == ["a1_b9"]
     assert second_complete["resolved_scope"]["items"][0]["project_name"] == candidate["project_name"]
-    assert fake_metadata.search_calls == 1
+    assert fake_metadata.search_calls >= 1

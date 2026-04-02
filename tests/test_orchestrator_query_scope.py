@@ -39,9 +39,9 @@ def test_orchestrator_final_query_params_keep_tg_values(monkeypatch) -> None:
         alias_memory={
             "a1_b9": {
                 "device": "a1_b9",
-                "name": "B2?",
+                "name": "B2柜",
                 "project_id": "p1",
-                "project_name": "??????????????",
+                "project_name": "中国能建集团数据机房监控项目",
                 "tg": "TG232",
             }
         },
@@ -58,12 +58,12 @@ def test_orchestrator_final_query_params_keep_tg_values(monkeypatch) -> None:
                 "data_type": "u_line",
                 "start_time": "2026-03-18",
                 "end_time": "2026-03-18",
-                "user_query": "a1_b9 ?????????",
+                "user_query": "a1_b9 今天的线电压数据",
             },
         },
     )
 
-    events = list(agent.run_with_progress("a1_b9 ?????????"))
+    events = list(agent.run_with_progress("a1_b9 今天的线电压数据"))
     final_event = next(event for event in events if event.get("type") == "final_answer")
 
     assert final_event["show_table"] is True
@@ -83,9 +83,9 @@ def test_partial_confirmed_explicit_compare_requires_reselection_and_offers_aggr
         alias_memory={
             "a1_b9": {
                 "device": "a1_b9",
-                "name": "B2?",
+                "name": "B2柜",
                 "project_id": "p1",
-                "project_name": "??????????????",
+                "project_name": "中国能建集团数据机房监控项目",
                 "tg": "TG232",
             }
         },
@@ -95,9 +95,9 @@ def test_partial_confirmed_explicit_compare_requires_reselection_and_offers_aggr
         if device_code == "a1_b9":
             return ([{
                 "device": "a1_b9",
-                "name": "B2?",
+                "name": "B2柜",
                 "project_id": "p1",
-                "project_name": "??????????????",
+                "project_name": "中国能建集团数据机房监控项目",
                 "project_code_name": "cneb-room",
                 "tg": "TG232",
                 "match_score": 100.0,
@@ -107,7 +107,7 @@ def test_partial_confirmed_explicit_compare_requires_reselection_and_offers_aggr
                 "device": "a1_b9",
                 "name": "601-612",
                 "project_id": "p2",
-                "project_name": "??????",
+                "project_name": "平陆运河项目",
                 "project_code_name": "pluyh",
                 "tg": "TG19",
                 "match_score": 100.0,
@@ -117,9 +117,9 @@ def test_partial_confirmed_explicit_compare_requires_reselection_and_offers_aggr
         if device_code == "b1_b14":
             return ([{
                 "device": "b1_b14",
-                "name": "??? AA3-1 ????",
+                "name": "电子楼 AA3-1 电源进线",
                 "project_id": "p3",
-                "project_name": "?????????",
+                "project_name": "智慧物联网能效平台",
                 "project_code_name": "iot-energy",
                 "tg": "TG314",
                 "match_score": 100.0,
@@ -140,12 +140,12 @@ def test_partial_confirmed_explicit_compare_requires_reselection_and_offers_aggr
                 "data_type": "ep",
                 "start_time": "2026-03-18",
                 "end_time": "2026-03-18",
-                "user_query": "a1_b9 ? b1_b14 ???????",
+                "user_query": "a1_b9 和 b1_b14 哪个耗电更多",
             },
         },
     )
 
-    events = list(agent.run_with_progress("a1_b9 ? b1_b14 ???????"))
+    events = list(agent.run_with_progress("a1_b9 和 b1_b14 哪个耗电更多"))
     final_event = next(event for event in events if event.get("type") == "final_answer")
 
     assert final_event.get("clarification_required") is True
@@ -373,9 +373,9 @@ def test_explicit_code_comparison_allows_multi_scope_only_with_explicit_aggregat
             return [
                 FakeItem({
                     "device": "a1_b9",
-                    "name": "B2?",
+                    "name": "B2柜",
                     "project_id": "p1",
-                    "project_name": "??????????????",
+                    "project_name": "中国能建集团数据机房监控项目",
                     "project_code_name": "cneb-room",
                     "tg": "TG1",
                     "match_score": 0.0,
@@ -385,7 +385,7 @@ def test_explicit_code_comparison_allows_multi_scope_only_with_explicit_aggregat
                     "device": "a1_b9",
                     "name": "601-612",
                     "project_id": "p2",
-                    "project_name": "??????",
+                    "project_name": "平陆运河项目",
                     "project_code_name": "pluyh",
                     "tg": "TG2",
                     "match_score": 0.0,
@@ -393,9 +393,9 @@ def test_explicit_code_comparison_allows_multi_scope_only_with_explicit_aggregat
                 }),
                 FakeItem({
                     "device": "b1_b14",
-                    "name": "??? AA3-1 ????",
+                    "name": "电子楼 AA3-1 电源进线",
                     "project_id": "p3",
-                    "project_name": "?????????",
+                    "project_name": "智慧物联网能效平台",
                     "project_code_name": "iot-energy",
                     "tg": "TG233",
                     "match_score": 0.0,
@@ -508,16 +508,16 @@ def test_orchestrator_sensor_final_event_includes_table_preview(monkeypatch) -> 
             "total_pages": 18,
             "has_more": True,
             "statistics": {"avg": 230.5},
-            "analysis": {"mode": "single", "metric": "??"},
+            "analysis": {"mode": "single", "metric": "ua"},
             "chart_specs": [],
             "show_charts": False,
             "focused_table": {
-                "headers": ["??", "??"],
-                "rows": [{"??": "A????ua????", "??": "230.50 V"}],
+                "headers": ["指标", "结果"],
+                "rows": [{"指标": "A相电压 ua 平均值", "结果": "230.50 V"}],
                 "total_count": 1,
                 "has_more": False,
                 "page_size": 1,
-                "view_label": "????",
+                "view_label": "问题直答",
             },
             "query_info": {"query": {}, "collections": ["source_data_ua_202401"]},
         }
@@ -531,9 +531,9 @@ def test_orchestrator_sensor_final_event_includes_table_preview(monkeypatch) -> 
         alias_memory={
             "a2_b1": {
                 "device": "a2_b1",
-                "name": "2#??? AA8-1 ?????",
+                "name": "2#变压器 AA8-1 配电室照明",
                 "project_id": "p1",
-                "project_name": "?????????",
+                "project_name": "智慧物联网能效平台",
                 "tg": "TG8",
             }
         },
@@ -550,12 +550,12 @@ def test_orchestrator_sensor_final_event_includes_table_preview(monkeypatch) -> 
                 "data_type": "ua",
                 "start_time": "2024-01-01",
                 "end_time": "2024-01-01",
-                "user_query": "a2_b1?2024?1?1??ua???",
+                "user_query": "a2_b1在2024年1月1日的ua是多少",
             },
         },
     )
 
-    events = list(agent.run_with_progress("a2_b1?2024?1?1??ua???"))
+    events = list(agent.run_with_progress("a2_b1在2024年1月1日的ua是多少"))
     final_event = next(event for event in events if event.get("type") == "final_answer")
 
     assert final_event["show_table"] is True
@@ -563,4 +563,4 @@ def test_orchestrator_sensor_final_event_includes_table_preview(monkeypatch) -> 
     assert final_event["table_preview"] is not None
     assert final_event["table_preview"]["data"][0]["device"] == "a2_b1"
     assert final_event["table_preview"]["data"][0]["tag"] == "ua"
-    assert final_event["table_preview"]["focused_table"]["view_label"] == "????"
+    assert final_event["table_preview"]["focused_table"]["view_label"] == "问题直答"

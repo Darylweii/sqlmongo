@@ -128,6 +128,17 @@ def _load_agent_modules():
             self.project_name = project_name
             self.project_code_name = project_code_name
 
+        def to_dict(self):
+            return {
+                "device": self.device,
+                "name": self.name,
+                "device_type": self.device_type,
+                "project_id": self.project_id,
+                "project_name": self.project_name,
+                "project_code_name": self.project_code_name,
+                "tg": getattr(self, "tg", None),
+            }
+
     metadata_module.DeviceInfo = DeviceInfo
     metadata_module.MetadataEngine = type("MetadataEngine", (), {})
     sys.modules["src.metadata.metadata_engine"] = metadata_module
@@ -161,10 +172,39 @@ def _load_agent_modules():
     class SmartDeviceFilter:
         @staticmethod
         def filter_comparison_devices(devices_with_metadata):
-            return devices_with_metadata, {"strategy": "???", "details": ""}
+            return devices_with_metadata, {"strategy": "semantic", "details": ""}
 
     smart_filter_module.SmartDeviceFilter = SmartDeviceFilter
     sys.modules["src.agent.utils.smart_device_filter"] = smart_filter_module
+
+    hybrid_resolver_module = types.ModuleType("src.agent.utils.hybrid_device_resolver")
+
+    class HybridResolveResult:
+        def __init__(self, rows=None, decision_mode="auto_resolve"):
+            self.rows = list(rows or [])
+            self.decision_mode = decision_mode
+
+    class HybridDeviceResolver:
+        def __init__(self, metadata_engine, device_search=None, enable_semantic_fallback=True):
+            self.metadata_engine = metadata_engine
+            self.device_search = device_search
+            self.enable_semantic_fallback = enable_semantic_fallback
+
+        def resolve(self, target):
+            rows, _sql = self.metadata_engine.search_devices(target)
+            normalized_rows = []
+            for row in rows or []:
+                if hasattr(row, "to_dict"):
+                    normalized_rows.append(row.to_dict())
+                else:
+                    normalized_rows.append(row)
+            decision_mode = "auto_resolve"
+            if normalized_rows:
+                decision_mode = str(normalized_rows[0].get("decision_mode") or decision_mode)
+            return HybridResolveResult(rows=normalized_rows, decision_mode=decision_mode)
+
+    hybrid_resolver_module.HybridDeviceResolver = HybridDeviceResolver
+    sys.modules["src.agent.utils.hybrid_device_resolver"] = hybrid_resolver_module
 
     for module_name, attrs in {
         "src.fetcher.data_fetcher": {"DataFetcher": type("DataFetcher", (), {}), "SensorDataResult": type("SensorDataResult", (), {})},
@@ -294,11 +334,13 @@ class FakeLLM:
 
 
 class FakeMetadataEngine:
-    def __init__(self, mapping, projects=None, project_stats=None, project_devices=None):
+    def __init__(self, mapping, projects=None, project_stats=None, project_devices=None, project_search=None, device_suggestions=None):
         self.mapping = mapping
         self.projects = list(projects or [])
         self.project_stats = list(project_stats or [])
         self.project_devices = dict(project_devices or {})
+        self.project_search = dict(project_search or {})
+        self.device_suggestions = dict(device_suggestions or {})
         self.calls = []
 
     def search_devices(self, target):
@@ -307,6 +349,13 @@ class FakeMetadataEngine:
 
     def list_projects(self):
         return list(self.projects)
+
+    def search_projects(self, keyword, limit=10):
+        return list(self.project_search.get(keyword, self.projects))[:limit]
+
+    def search_device_suggestions(self, keyword, limit=10, project_id=None):
+        results = list(self.device_suggestions.get((keyword, project_id), self.device_suggestions.get(keyword, [])))
+        return results[:limit]
 
     def get_project_device_stats(self):
         return list(self.project_stats)
@@ -573,11 +622,11 @@ def test_semantic_metadata_mapper_comparison_allows_explicit_aggregate_scope() -
     modules = _load_agent_modules()
     DeviceInfo = modules["DeviceInfo"]
 
-    candidate_one = DeviceInfo("a1_b9", "B2?", project_id="p1", project_name="??????????????", project_code_name="cneb-room")
+    candidate_one = DeviceInfo("a1_b9", "B2柜", project_id="p1", project_name="中国能建集团数据机房监控项目", project_code_name="cneb-room")
     candidate_one.tg = "TG1"
-    candidate_two = DeviceInfo("a1_b9", "601-612", project_id="p2", project_name="??????", project_code_name="pluyh")
+    candidate_two = DeviceInfo("a1_b9", "601-612", project_id="p2", project_name="平陆运河项目", project_code_name="pluyh")
     candidate_two.tg = "TG2"
-    candidate_three = DeviceInfo("b1_b14", "??? AA3-1 ????", project_id="p3", project_name="?????????", project_code_name="iot-energy")
+    candidate_three = DeviceInfo("b1_b14", "电子楼 AA3-1 电源进线", project_id="p3", project_name="智慧物联网能效平台", project_code_name="iot-energy")
     candidate_three.tg = "TG233"
 
     engine = FakeMetadataEngine({"a1_b9": [candidate_one, candidate_two], "b1_b14": [candidate_three]})
@@ -612,20 +661,20 @@ def test_semantic_metadata_mapper_keeps_real_score_for_fuzzy_candidates() -> Non
     candidates = node._select_clarification_candidates([
         {
             "device_id": "a10_b1",
-            "device_name": "1#?????? ???",
+            "device_name": "1#变压器集中器 味多美",
             "project_id": "p1",
-            "project_name": "?????????",
+            "project_name": "智慧物联网能效平台",
             "project_code_name": "iot-energy",
             "tg": "TG1",
             "score": 88.0,
-            "match_reason": "?????????",
+            "match_reason": "语义召回",
             "matched_fields": ["device_name"],
         }
     ])
 
     assert candidates[0]["match_type"] == "semantic"
     assert candidates[0]["match_score"] == 88.0
-    assert candidates[0]["match_reason"] == "?????????"
+    assert candidates[0]["match_reason"] == "语义召回"
 
 
 def test_sharding_router_prefers_query_plan_data_type() -> None:
@@ -793,6 +842,163 @@ def test_action_override_policy_node_short_circuits_project_listing() -> None:
     assert modules["route_after_action_override"](result) == "terminal"
 
 
+def test_action_override_policy_node_returns_single_project_stats_when_target_matches() -> None:
+    modules = _load_agent_modules()
+    node = modules["ActionOverridePolicyNode"](
+        FakeMetadataEngine(
+            {},
+            project_stats=[
+                {"id": "p12", "project_name": "平陆运河项目", "code_name": "plyh", "device_count": 24},
+                {"id": "p1", "project_name": "和襄高速", "code_name": "hxgs", "device_count": 1172},
+            ],
+            project_search={
+                "平陆运河": [
+                    {"id": "p12", "project_name": "平陆运河项目", "project_code_name": "plyh", "match_score": 92, "match_reason": "项目名称模糊匹配", "matched_fields": ["project_name"]},
+                ]
+            },
+        )
+    )
+
+    result = node({
+        "query_plan": {
+            "query_mode": "project_stats",
+            "search_targets": ["平陆运河"],
+            "explicit_device_codes": [],
+            "has_project_stats_intent": True,
+        },
+        "intent": {},
+        "history": [],
+    })
+
+    assert result["override_action"] == "get_project_stats"
+    assert result["override_terminal"] is True
+    assert result["table_type"] == "project_stats"
+    assert result["query_info"]["stats"] == [{"id": "p12", "project_name": "平陆运河项目", "code_name": "plyh", "device_count": 24}]
+    assert "24" in result["final_response"]
+
+
+def test_action_override_policy_node_clarifies_ambiguous_project_stats_target() -> None:
+    modules = _load_agent_modules()
+    node = modules["ActionOverridePolicyNode"](
+        FakeMetadataEngine(
+            {},
+            project_stats=[],
+            project_search={
+                "测试项目": [
+                    {"id": "51", "project_name": "测试项目", "project_code_name": "111", "match_score": 90, "match_reason": "项目名称模糊匹配", "matched_fields": ["project_name"]},
+                    {"id": "70", "project_name": "测试项目", "project_code_name": "123", "match_score": 89, "match_reason": "项目名称模糊匹配", "matched_fields": ["project_name"]},
+                ]
+            },
+        )
+    )
+
+    result = node({
+        "query_plan": {
+            "query_mode": "project_stats",
+            "search_targets": ["测试项目"],
+            "explicit_device_codes": [],
+            "has_project_stats_intent": True,
+        },
+        "intent": {},
+        "history": [],
+    })
+
+    assert result["clarification_required"] is True
+    assert result["clarification_candidates"][0]["candidate_kind"] == "project"
+    assert len(result["clarification_candidates"][0]["candidates"]) == 2
+
+
+def test_action_override_policy_node_returns_top_project_for_project_stats_max_query() -> None:
+    modules = _load_agent_modules()
+    node = modules["ActionOverridePolicyNode"](
+        FakeMetadataEngine(
+            {},
+            project_stats=[
+                {"id": "p1", "project_name": "和襄高速", "code_name": "hxgs", "device_count": 1172},
+                {"id": "p2", "project_name": "珠海市民服务中心", "code_name": "zhsm", "device_count": 850},
+                {"id": "p3", "project_name": "京电设备低碳智慧园区", "code_name": "bjdlzdh", "device_count": 284},
+            ],
+        )
+    )
+
+    result = node({
+        "query_plan": {
+            "current_question": "哪个项目设备最多",
+            "query_mode": "project_stats",
+            "search_targets": [],
+            "explicit_device_codes": [],
+            "has_project_stats_intent": True,
+        },
+        "intent": {},
+        "history": [],
+    })
+
+    assert result["override_action"] == "get_project_stats"
+    assert result["table_type"] == "project_stats"
+    assert result["query_info"]["stats"][0]["project_name"] == "和襄高速"
+    assert result["query_info"]["stats"][0]["device_count"] == 1172
+    assert "和襄高速" in result["final_response"]
+
+
+def test_action_override_policy_node_returns_bottom_project_for_project_stats_min_query() -> None:
+    modules = _load_agent_modules()
+    node = modules["ActionOverridePolicyNode"](
+        FakeMetadataEngine(
+            {},
+            project_stats=[
+                {"id": "p1", "project_name": "和襄高速", "code_name": "hxgs", "device_count": 1172},
+                {"id": "p2", "project_name": "测试项目1", "code_name": "test1", "device_count": 0},
+                {"id": "p3", "project_name": "智慧管廊", "code_name": "zhgl", "device_count": 2},
+            ],
+        )
+    )
+
+    result = node({
+        "query_plan": {
+            "current_question": "哪个项目设备最少",
+            "query_mode": "project_stats",
+            "search_targets": [],
+            "explicit_device_codes": [],
+            "has_project_stats_intent": True,
+        },
+        "intent": {},
+        "history": [],
+    })
+
+    assert result["override_action"] == "get_project_stats"
+    assert result["table_type"] == "project_stats"
+    assert result["query_info"]["stats"][0]["project_name"] == "测试项目1"
+    assert result["query_info"]["stats"][0]["device_count"] == 0
+    assert "测试项目1" in result["final_response"]
+
+
+def test_action_override_policy_node_returns_top10_for_project_stats_ranking_query() -> None:
+    modules = _load_agent_modules()
+    stats = [
+        {"id": f"p{i}", "project_name": f"项目{i}", "code_name": f"p{i}", "device_count": 200 - i}
+        for i in range(12)
+    ]
+    node = modules["ActionOverridePolicyNode"](FakeMetadataEngine({}, project_stats=stats))
+
+    result = node({
+        "query_plan": {
+            "current_question": "项目设备排名前十",
+            "query_mode": "project_stats",
+            "search_targets": [],
+            "explicit_device_codes": [],
+            "has_project_stats_intent": True,
+        },
+        "intent": {},
+        "history": [],
+    })
+
+    assert result["override_action"] == "get_project_stats"
+    assert result["table_type"] == "project_stats"
+    assert len(result["query_info"]["stats"]) == 10
+    assert result["query_info"]["stats"][0]["project_name"] == "项目0"
+    assert "前 10 个项目" in result["final_response"]
+
+
 def test_action_override_policy_node_keeps_default_when_scope_not_pre_resolved() -> None:
     modules = _load_agent_modules()
     device_a = modules["DeviceInfo"]("a1_b9", "Target One Device")
@@ -924,14 +1130,14 @@ def test_metadata_mapper_single_explicit_code_reuses_session_alias_without_recla
     DeviceInfo = modules["DeviceInfo"]
     engine = FakeMetadataEngine({
         "a1_b9": [
-            DeviceInfo("a1_b9", "B2?", project_id="p1", project_name="??????????????", project_code_name="cneb-room"),
-            DeviceInfo("a1_b9", "601-612", project_id="p2", project_name="??????", project_code_name="pluyh"),
+            DeviceInfo("a1_b9", "B2柜", project_id="p1", project_name="中国能建集团数据机房监控项目", project_code_name="cneb-room"),
+            DeviceInfo("a1_b9", "601-612", project_id="p2", project_name="平陆运河项目", project_code_name="pluyh"),
         ]
     })
     node = modules["MetadataMapperNode"](metadata_engine=engine)
 
     result = node({
-        "query": "a1_b9 ?? 2024?1?????????50?",
+        "query": "a1_b9 在 2024年1月的电压数据",
         "query_plan": {
             "query_mode": "sensor_query",
             "search_targets": ["a1_b9"],
@@ -941,9 +1147,9 @@ def test_metadata_mapper_single_explicit_code_reuses_session_alias_without_recla
         "alias_memory": {
             "a1_b9": {
                 "device": "a1_b9",
-                "name": "B2?",
+                "name": "B2柜",
                 "project_id": "p1",
-                "project_name": "??????????????",
+                "project_name": "中国能建集团数据机房监控项目",
                 "project_code_name": "cneb-room",
                 "tg": "TG232",
             }
@@ -961,7 +1167,7 @@ def test_semantic_metadata_mapper_single_explicit_code_reuses_session_alias_with
     node = modules["SemanticMetadataMapperNode"](metadata_engine=FakeMetadataEngine({}))
 
     result = node({
-        "query": "a1_b9 ?? 2024?1?????????50?",
+        "query": "a1_b9 在 2024年1月的电压数据",
         "query_plan": {
             "query_mode": "sensor_query",
             "search_targets": ["a1_b9"],
@@ -971,9 +1177,9 @@ def test_semantic_metadata_mapper_single_explicit_code_reuses_session_alias_with
         "alias_memory": {
             "a1_b9": {
                 "device": "a1_b9",
-                "name": "B2?",
+                "name": "B2柜",
                 "project_id": "p1",
-                "project_name": "??????????????",
+                "project_name": "中国能建集团数据机房监控项目",
                 "project_code_name": "cneb-room",
                 "tg": "TG232",
             }
@@ -991,19 +1197,19 @@ def test_metadata_mapper_comparison_reuses_alias_scope_when_all_explicit_targets
     DeviceInfo = modules["DeviceInfo"]
     engine = FakeMetadataEngine({
         "a1_b9": [
-            DeviceInfo("a1_b9", "B2?", project_id="p1", project_name="??????????????", project_code_name="cneb-room"),
-            DeviceInfo("a1_b9", "601-612", project_id="p2", project_name="??????", project_code_name="pluyh"),
+            DeviceInfo("a1_b9", "B2柜", project_id="p1", project_name="中国能建集团数据机房监控项目", project_code_name="cneb-room"),
+            DeviceInfo("a1_b9", "601-612", project_id="p2", project_name="平陆运河项目", project_code_name="pluyh"),
         ],
         "b1_b14": [
-            DeviceInfo("b1_b14", "??? AA3-1 ????", project_id="p3", project_name="?????????", project_code_name="iot-energy"),
+            DeviceInfo("b1_b14", "电子楼 AA3-1 电源进线", project_id="p3", project_name="智慧物联网能效平台", project_code_name="iot-energy"),
         ],
     })
     node = modules["MetadataMapperNode"](metadata_engine=engine)
 
     result = node({
-        "query": "a1_b9 ? b1_b14 ???????",
+        "query": "a1_b9 和 b1_b14 哪个耗电更多",
         "query_plan": {
-            "current_question": "a1_b9 ? b1_b14 ???????",
+            "current_question": "a1_b9 和 b1_b14 哪个耗电更多",
             "query_mode": "comparison",
             "search_targets": ["a1_b9", "b1_b14"],
             "explicit_device_codes": ["a1_b9", "b1_b14"],
@@ -1013,17 +1219,17 @@ def test_metadata_mapper_comparison_reuses_alias_scope_when_all_explicit_targets
         "alias_memory": {
             "a1_b9": {
                 "device": "a1_b9",
-                "name": "B2?",
+                "name": "B2柜",
                 "project_id": "p1",
-                "project_name": "??????????????",
+                "project_name": "中国能建集团数据机房监控项目",
                 "project_code_name": "cneb-room",
                 "tg": "TG232",
             },
             "b1_b14": {
                 "device": "b1_b14",
-                "name": "??? AA3-1 ????",
+                "name": "电子楼 AA3-1 电源进线",
                 "project_id": "p3",
-                "project_name": "?????????",
+                "project_name": "智慧物联网能效平台",
                 "project_code_name": "iot-energy",
                 "tg": "TG233",
             },
@@ -1040,11 +1246,11 @@ def test_metadata_mapper_comparison_reuses_alias_scope_when_all_explicit_targets
 def test_metadata_mapper_comparison_reuses_confirmed_alias_even_if_other_target_is_only_uniquely_resolved() -> None:
     modules = _load_agent_modules()
     DeviceInfo = modules["DeviceInfo"]
-    a1_1 = DeviceInfo("a1_b9", "B2?", project_id="p1", project_name="??????????????", project_code_name="cneb-room")
+    a1_1 = DeviceInfo("a1_b9", "B2柜", project_id="p1", project_name="中国能建集团数据机房监控项目", project_code_name="cneb-room")
     a1_1.tg = "TG232"
-    a1_2 = DeviceInfo("a1_b9", "601-612", project_id="p2", project_name="??????", project_code_name="pluyh")
+    a1_2 = DeviceInfo("a1_b9", "601-612", project_id="p2", project_name="平陆运河项目", project_code_name="pluyh")
     a1_2.tg = "TG19"
-    b1 = DeviceInfo("b1_b14", "??? AA3-1 ????", project_id="p3", project_name="?????????", project_code_name="iot-energy")
+    b1 = DeviceInfo("b1_b14", "电子楼 AA3-1 电源进线", project_id="p3", project_name="智慧物联网能效平台", project_code_name="iot-energy")
     b1.tg = "TG233"
     engine = FakeMetadataEngine({
         "a1_b9": [a1_1, a1_2],
@@ -1053,9 +1259,9 @@ def test_metadata_mapper_comparison_reuses_confirmed_alias_even_if_other_target_
     node = modules["MetadataMapperNode"](metadata_engine=engine)
 
     result = node({
-        "query": "a1_b9 ? b1_b14 ???????",
+        "query": "a1_b9 和 b1_b14 哪个耗电更多",
         "query_plan": {
-            "current_question": "a1_b9 ? b1_b14 ???????",
+            "current_question": "a1_b9 和 b1_b14 哪个耗电更多",
             "query_mode": "comparison",
             "search_targets": ["a1_b9", "b1_b14"],
             "explicit_device_codes": ["a1_b9", "b1_b14"],
@@ -1065,9 +1271,9 @@ def test_metadata_mapper_comparison_reuses_confirmed_alias_even_if_other_target_
         "alias_memory": {
             "a1_b9": {
                 "device": "a1_b9",
-                "name": "B2?",
+                "name": "B2柜",
                 "project_id": "p1",
-                "project_name": "??????????????",
+                "project_name": "中国能建集团数据机房监控项目",
                 "project_code_name": "cneb-room",
                 "tg": "TG232",
             },
@@ -1086,9 +1292,9 @@ def test_semantic_metadata_mapper_comparison_reuses_alias_scope_when_all_explici
     node = modules["SemanticMetadataMapperNode"](metadata_engine=FakeMetadataEngine({}))
 
     result = node({
-        "query": "a1_b9 ? b1_b14 ???????",
+        "query": "a1_b9 和 b1_b14 哪个耗电更多",
         "query_plan": {
-            "current_question": "a1_b9 ? b1_b14 ???????",
+            "current_question": "a1_b9 和 b1_b14 哪个耗电更多",
             "query_mode": "comparison",
             "search_targets": ["a1_b9", "b1_b14"],
             "explicit_device_codes": ["a1_b9", "b1_b14"],
@@ -1098,17 +1304,17 @@ def test_semantic_metadata_mapper_comparison_reuses_alias_scope_when_all_explici
         "alias_memory": {
             "a1_b9": {
                 "device": "a1_b9",
-                "name": "B2?",
+                "name": "B2柜",
                 "project_id": "p1",
-                "project_name": "??????????????",
+                "project_name": "中国能建集团数据机房监控项目",
                 "project_code_name": "cneb-room",
                 "tg": "TG232",
             },
             "b1_b14": {
                 "device": "b1_b14",
-                "name": "??? AA3-1 ????",
+                "name": "电子楼 AA3-1 电源进线",
                 "project_id": "p3",
-                "project_name": "?????????",
+                "project_name": "智慧物联网能效平台",
                 "project_code_name": "iot-energy",
                 "tg": "TG233",
             },
@@ -1124,11 +1330,11 @@ def test_semantic_metadata_mapper_comparison_reuses_alias_scope_when_all_explici
 def test_semantic_metadata_mapper_comparison_reuses_confirmed_alias_even_if_other_target_is_only_uniquely_resolved() -> None:
     modules = _load_agent_modules()
     DeviceInfo = modules["DeviceInfo"]
-    a1_1 = DeviceInfo("a1_b9", "B2?", project_id="p1", project_name="??????????????", project_code_name="cneb-room")
+    a1_1 = DeviceInfo("a1_b9", "B2柜", project_id="p1", project_name="中国能建集团数据机房监控项目", project_code_name="cneb-room")
     a1_1.tg = "TG232"
-    a1_2 = DeviceInfo("a1_b9", "601-612", project_id="p2", project_name="??????", project_code_name="pluyh")
+    a1_2 = DeviceInfo("a1_b9", "601-612", project_id="p2", project_name="平陆运河项目", project_code_name="pluyh")
     a1_2.tg = "TG19"
-    b1 = DeviceInfo("b1_b14", "??? AA3-1 ????", project_id="p3", project_name="?????????", project_code_name="iot-energy")
+    b1 = DeviceInfo("b1_b14", "电子楼 AA3-1 电源进线", project_id="p3", project_name="智慧物联网能效平台", project_code_name="iot-energy")
     b1.tg = "TG233"
     engine = FakeMetadataEngine({
         "a1_b9": [a1_1, a1_2],
@@ -1137,9 +1343,9 @@ def test_semantic_metadata_mapper_comparison_reuses_confirmed_alias_even_if_othe
     node = modules["SemanticMetadataMapperNode"](metadata_engine=engine)
 
     result = node({
-        "query": "a1_b9 ? b1_b14 ???????",
+        "query": "a1_b9 和 b1_b14 哪个耗电更多",
         "query_plan": {
-            "current_question": "a1_b9 ? b1_b14 ???????",
+            "current_question": "a1_b9 和 b1_b14 哪个耗电更多",
             "query_mode": "comparison",
             "search_targets": ["a1_b9", "b1_b14"],
             "explicit_device_codes": ["a1_b9", "b1_b14"],
@@ -1149,9 +1355,9 @@ def test_semantic_metadata_mapper_comparison_reuses_confirmed_alias_even_if_othe
         "alias_memory": {
             "a1_b9": {
                 "device": "a1_b9",
-                "name": "B2?",
+                "name": "B2柜",
                 "project_id": "p1",
-                "project_name": "??????????????",
+                "project_name": "中国能建集团数据机房监控项目",
                 "project_code_name": "cneb-room",
                 "tg": "TG232",
             },
@@ -1170,11 +1376,11 @@ def test_semantic_metadata_mapper_comparison_reuses_confirmed_alias_even_if_othe
 def test_metadata_mapper_lists_devices_by_project_hint() -> None:
     modules = _load_agent_modules()
     DeviceInfo = modules["DeviceInfo"]
-    device = DeviceInfo("bj_b1", "????????", project_id="p1", project_name="??????")
+    device = DeviceInfo("bj_b1", "北京动力总表", project_id="p1", project_name="北京电力项目")
     device.tg = "TG100"
     engine = FakeMetadataEngine(
-        mapping={"?????????": []},
-        projects=[{"id": "p1", "project_name": "??????", "project_code_name": "beijing-power"}],
+        mapping={"北京动力": []},
+        projects=[{"id": "p1", "project_name": "北京电力项目", "project_code_name": "beijing-power"}],
         project_devices={"p1": [device]},
     )
     node = modules["MetadataMapperNode"](engine)
@@ -1183,8 +1389,8 @@ def test_metadata_mapper_lists_devices_by_project_hint() -> None:
         "history": [],
         "query_plan": {
             "query_mode": "device_listing",
-            "search_targets": ["?????????"],
-            "project_hints": ["??????"],
+            "search_targets": ["北京动力"],
+            "project_hints": ["北京电力项目"],
             "has_device_listing_intent": True,
         },
     })
@@ -1192,7 +1398,212 @@ def test_metadata_mapper_lists_devices_by_project_hint() -> None:
     assert result["show_table"] is True
     assert result["table_type"] == "devices"
     assert result["devices"][0]["device"] == "bj_b1"
-    assert result["devices"][0]["project_name"] == "??????"
+    assert result["devices"][0]["project_name"] == "北京电力项目"
+
+
+def test_metadata_mapper_device_listing_uses_fuzzy_project_candidate_when_device_not_found() -> None:
+    modules = _load_agent_modules()
+    DeviceInfo = modules["DeviceInfo"]
+    device = DeviceInfo("lj_b1", "Hydro Main Feed", project_id="p9", project_name="longjiang hydro system")
+    device.tg = "TG900"
+    engine = FakeMetadataEngine(
+        mapping={"longjiang hydro": []},
+        project_devices={"p9": [device]},
+        project_search={
+            "longjiang hydro": [
+                {
+                    "id": "p9",
+                    "project_name": "longjiang hydro system",
+                    "project_code_name": "longjiang-hydro",
+                    "match_score": 88,
+                    "match_reason": "project fuzzy match",
+                    "matched_fields": ["project_name"],
+                }
+            ]
+        },
+    )
+    node = modules["MetadataMapperNode"](engine)
+
+    result = node({
+        "history": [],
+        "query_plan": {
+            "query_mode": "device_listing",
+            "search_targets": ["longjiang hydro"],
+            "has_device_listing_intent": True,
+        },
+    })
+
+    assert result["show_table"] is True
+    assert result["table_type"] == "devices"
+    assert result["devices"][0]["device"] == "lj_b1"
+    assert result["devices"][0]["project_name"] == "longjiang hydro system"
+
+
+def test_metadata_mapper_device_listing_returns_project_recommendation_for_typo_like_query() -> None:
+    modules = _load_agent_modules()
+    engine = FakeMetadataEngine(
+        mapping={"beizi typo": []},
+        project_search={
+            "beizi typo": [
+                {
+                    "id": "p10",
+                    "project_name": "beizi smart campus",
+                    "project_code_name": "beizi-campus",
+                    "match_score": 62,
+                    "match_reason": "project fuzzy match",
+                    "matched_fields": ["project_name"],
+                }
+            ]
+        },
+    )
+    node = modules["MetadataMapperNode"](engine)
+
+    result = node({
+        "history": [],
+        "query_plan": {
+            "query_mode": "device_listing",
+            "search_targets": ["beizi typo"],
+            "has_device_listing_intent": True,
+        },
+    })
+
+    assert result["clarification_required"] is True
+    assert result["show_table"] is False
+    assert result["clarification_candidates"][0]["candidate_kind"] == "project"
+    assert len(result["clarification_candidates"][0]["candidates"]) == 1
+    assert result["clarification_candidates"][0]["candidates"][0]["is_recommended"] is True
+
+
+def test_metadata_mapper_returns_device_typo_clarification_with_project_scope() -> None:
+    modules = _load_agent_modules()
+    engine = FakeMetadataEngine(
+        mapping={"air typo": []},
+        project_search={
+            "north campus typo": [
+                {
+                    "id": "p10",
+                    "project_name": "north campus",
+                    "project_code_name": "north-campus",
+                    "match_score": 92,
+                    "match_reason": "project fuzzy match",
+                    "matched_fields": ["project_name"],
+                }
+            ]
+        },
+        device_suggestions={
+            ("air typo", "p10"): [
+                {
+                    "device": "ac_01",
+                    "name": "空调一号",
+                    "project_id": "p10",
+                    "project_name": "north campus",
+                    "project_code_name": "north-campus",
+                    "tg": "TG10",
+                    "match_score": 58,
+                    "match_reason": "设备名称近似匹配",
+                    "matched_fields": ["name"],
+                    "retrieval_source": "lexical",
+                    "decision_mode": "recommend_confirm",
+                }
+            ]
+        },
+    )
+    node = modules["MetadataMapperNode"](engine)
+
+    result = node({
+        "history": [],
+        "query_plan": {
+            "query_mode": "device_listing",
+            "search_targets": ["air typo"],
+            "project_hints": ["north campus typo"],
+            "has_device_listing_intent": True,
+        },
+    })
+
+    assert result["clarification_required"] is True
+    assert result["clarification_candidates"][0]["candidate_kind"] == "device"
+    assert len(result["clarification_candidates"][0]["candidates"]) == 1
+    assert result["clarification_candidates"][0]["candidates"][0]["device"] == "ac_01"
+
+
+def test_metadata_mapper_returns_single_device_typo_clarification_for_sensor_query() -> None:
+    modules = _load_agent_modules()
+    engine = FakeMetadataEngine(
+        mapping={
+            "air typo": [
+                {
+                    "device": "ac_01",
+                    "name": "空调一号",
+                    "project_id": "p10",
+                    "project_name": "north campus",
+                    "project_code_name": "north-campus",
+                    "tg": "TG10",
+                    "match_score": 58,
+                    "match_reason": "设备名称近似匹配",
+                    "matched_fields": ["name"],
+                    "retrieval_source": "lexical",
+                    "decision_mode": "recommend_confirm",
+                }
+            ]
+        },
+    )
+    node = modules["MetadataMapperNode"](engine)
+
+    result = node({
+        "history": [],
+        "query_plan": {
+            "query_mode": "sensor_query",
+            "search_targets": ["air typo"],
+            "has_sensor_intent": True,
+        },
+    })
+
+    assert result["clarification_required"] is True
+    assert result["clarification_candidates"][0]["candidate_kind"] == "device"
+    assert len(result["clarification_candidates"][0]["candidates"]) == 1
+
+
+def test_metadata_mapper_device_listing_returns_project_clarification_for_ambiguous_project_match() -> None:
+    modules = _load_agent_modules()
+    engine = FakeMetadataEngine(
+        mapping={"龙江水电厂": []},
+        project_search={
+            "龙江水电厂": [
+                {
+                    "id": "p9",
+                    "project_name": "龙江公司智慧水电厂系统",
+                    "project_code_name": "longjiang-hydro",
+                    "match_score": 86,
+                    "match_reason": "项目名称模糊匹配",
+                    "matched_fields": ["project_name"],
+                },
+                {
+                    "id": "p10",
+                    "project_name": "龙江智慧水电厂平台",
+                    "project_code_name": "longjiang-hydro-lite",
+                    "match_score": 83,
+                    "match_reason": "项目名称模糊匹配",
+                    "matched_fields": ["project_name"],
+                },
+            ]
+        },
+    )
+    node = modules["MetadataMapperNode"](engine)
+
+    result = node({
+        "history": [],
+        "query_plan": {
+            "query_mode": "device_listing",
+            "search_targets": ["龙江水电厂"],
+            "has_device_listing_intent": True,
+        },
+    })
+
+    assert result["clarification_required"] is True
+    assert result["show_table"] is False
+    assert result["clarification_candidates"][0]["candidate_kind"] == "project"
+    assert len(result["clarification_candidates"][0]["candidates"]) == 2
+    assert result["clarification_candidates"][0]["candidates"][0]["is_recommended"] is True
 
 
 def test_dag_sharding_router_prefers_requested_tags_for_single_phase() -> None:
@@ -1200,9 +1611,9 @@ def test_dag_sharding_router_prefers_requested_tags_for_single_phase() -> None:
     node = modules["ShardingRouterNode"]()
     GraphState = sys.modules['src.agent.types'].GraphState
     state = GraphState(
-        user_query='a2_b1?2024?1?1??ua???',
+        user_query='a2_b1在2024年1月1日的ua是多少',
         query_plan={
-            'current_question': 'a2_b1?2024?1?1??ua???',
+            'current_question': 'a2_b1在2024年1月1日的ua是多少',
             'inferred_data_type': 'ua',
             'time_start': '2024-01-01',
             'time_end': '2024-01-01',
@@ -1225,7 +1636,7 @@ def test_query_time_range_resolves_relaxed_exact_day_from_confirmation_text() ->
     query_time_range = sys.modules['src.agent.query_time_range']
 
     result = query_time_range.resolve_time_range_from_query(
-        'a2_b1?2024?1?1??ua???',
+        'a2_b1在2024年1月1日的ua是多少',
         now=datetime(2026, 3, 26, 12, 0, 0),
     )
 
@@ -1237,7 +1648,7 @@ def test_fallback_query_plan_keeps_exact_day_for_confirmation_text() -> None:
     _load_agent_modules()
     query_plan = sys.modules['src.agent.query_plan']
 
-    plan = query_plan.fallback_query_plan('a2_b1?2024?1?1??ua???')
+    plan = query_plan.fallback_query_plan('a2_b1在2024年1月1日的ua是多少')
 
     assert plan.time_start == '2024-01-01'
     assert plan.time_end == '2024-01-01'

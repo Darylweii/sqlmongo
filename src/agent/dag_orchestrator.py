@@ -254,6 +254,7 @@ class DAGOrchestrator:
         semantic_layer_config: Optional[SemanticLayerConfig] = None,
         use_semantic_search: bool = False,
         alias_memory: Optional[Dict[str, Any]] = None,
+        confirmed_project: Optional[Dict[str, Any]] = None,
     ):
         """
         初始化 DAG 编排器
@@ -282,6 +283,7 @@ class DAGOrchestrator:
         self.max_collections = max_collections
         self.use_semantic_search = use_semantic_search
         self.alias_memory = dict(alias_memory or {})
+        self.confirmed_project = dict(confirmed_project or {}) if isinstance(confirmed_project, dict) else None
         
         # 初始化语义层（如果启用）
         # Requirements 5.1: 在初始化时创建语义层实例
@@ -392,7 +394,7 @@ class DAGOrchestrator:
         
         workflow.add_edge(START, NODE_INTENT_PARSER)
 
-        # QueryPlan ?????? QueryPlan?????????????????????
+        # QueryPlan 之后：根据 QueryPlan 结果决定后续进入哪个节点
         workflow.add_conditional_edges(
             NODE_INTENT_PARSER,
             route_after_query_plan,
@@ -404,7 +406,7 @@ class DAGOrchestrator:
             }
         )
         
-        # ?????????Action Override -> Metadata Mapper / Sharding Router / END / Synthesizer
+        # Action Override 之后：继续解析设备、直接查数、终止返回，或进入回答节点
         workflow.add_conditional_edges(
             NODE_ACTION_OVERRIDE_POLICY,
             route_after_action_override,
@@ -416,7 +418,7 @@ class DAGOrchestrator:
             }
         )
         
-        # ?????????Metadata Mapper -> Sharding Router ??Synthesizer????????
+        # Metadata Mapper 之后：继续分片查询，或在异常时进入 Synthesizer 输出结果
         workflow.add_conditional_edges(
             NODE_METADATA_MAPPER,
             route_after_metadata,
@@ -518,6 +520,7 @@ class DAGOrchestrator:
         return GraphState(
             user_query=current_question,
             alias_memory=dict(self.alias_memory),
+            confirmed_project=dict(self.confirmed_project or {}) if isinstance(self.confirmed_project, dict) else None,
             intent=None,
             query_plan=None,
             is_comparison=False,

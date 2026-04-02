@@ -194,7 +194,7 @@ def test_parse_project_scoped_device_listing_query() -> None:
 
 
 def test_parse_exact_phase_voltage_query_prefers_local_metric_tag() -> None:
-    parsed = parse_query_entities("a2_b1?2024?1?1??ua???")
+    parsed = parse_query_entities("a2_b1在2024年1月1日的ua是多少")
     assert parsed.has_sensor_intent is True
     assert parsed.inferred_data_type == "ua"
     assert parsed.explicit_device_codes == ("a2_b1",)
@@ -202,7 +202,7 @@ def test_parse_exact_phase_voltage_query_prefers_local_metric_tag() -> None:
 
 
 def test_parse_multi_phase_voltage_query_keeps_voltage_family() -> None:
-    parsed = parse_query_entities("?? a2_b1 ?2024?1?1??ua?ub")
+    parsed = parse_query_entities("查询 a2_b1 在2024年1月1日的ua和ub")
     assert parsed.has_sensor_intent is True
     assert parsed.inferred_data_type == "u_line"
     assert parsed.explicit_device_codes == ("a2_b1",)

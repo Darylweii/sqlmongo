@@ -204,6 +204,85 @@ def test_chat_stream_alias_confirmation_reuses_original_question_and_tg(monkeypa
     assert call_records[1]["message_with_history"] == "a1_b9 设备今天的用电量"
 
 
+def test_chat_stream_confirm_project_scope_returns_devices_without_replanning(monkeypatch) -> None:
+    app_module = _load_app_module()
+    create_calls = []
+
+    class _Device:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def to_dict(self):
+            return dict(self.payload)
+
+    monkeypatch.setattr(
+        app_module.metadata_engine,
+        "get_devices_by_project",
+        lambda project_id: [
+            _Device(
+                {
+                    "device": "dev_001",
+                    "name": "测试设备A",
+                    "project_id": project_id,
+                    "project_name": "测试项目",
+                    "project_code_name": "111",
+                    "tg": "TG-A",
+                }
+            ),
+            _Device(
+                {
+                    "device": "dev_002",
+                    "name": "测试设备B",
+                    "project_id": project_id,
+                    "project_name": "测试项目",
+                    "project_code_name": "111",
+                    "tg": "TG-B",
+                }
+            ),
+        ],
+    )
+
+    def fake_factory(**kwargs):
+        create_calls.append(kwargs)
+        raise AssertionError("project confirmation should not invoke chat agent")
+
+    monkeypatch.setattr(app_module, "_create_chat_agent", fake_factory)
+
+    with TestClient(app_module.app) as client:
+        response = client.post(
+            "/api/chat/stream",
+            json={
+                "message": "选这个项目",
+                "history": [],
+                "session_id": "project-confirm-1",
+                "alias_confirmation": {
+                    "action": "confirm_project_scope",
+                    "alias": "测试项目",
+                    "keyword": "测试项目",
+                    "project_id": "51",
+                    "project_name": "测试项目",
+                    "project_code_name": "111",
+                    "original_question": "测试项目有哪些设备",
+                },
+            },
+        )
+
+    events = _parse_sse_events(response.text)
+    assert response.status_code == 200
+    assert [event["type"] for event in events] == ["step_start", "step_done", "complete"]
+    assert events[0]["step"] == "确认项目并列出设备"
+    assert events[1]["step"] == "确认项目并列出设备"
+    complete = events[-1]
+    assert complete["type"] == "complete"
+    assert complete["show_table"] is True
+    assert complete["table_type"] == "devices"
+    assert complete["clarification_required"] is False
+    assert [item["device"] for item in complete["devices"]] == ["dev_001", "dev_002"]
+    assert complete["resolved_scope"]["device_count"] == 2
+    assert complete["original_question"] == "测试项目有哪些设备"
+    assert create_calls == []
+
+
 def test_projects_endpoint_error_uses_standard_error_payload(monkeypatch) -> None:
     app_module = _load_app_module()
 
@@ -236,9 +315,9 @@ def test_build_resolved_scope_marks_cross_project_aggregate_scope(monkeypatch) -
 
     def fake_list_all_devices():
         return [
-            _Device({"device": "a1_b9", "name": "B2?", "project_id": "p1", "project_name": "??????????????", "project_code_name": "ceec", "tg": "TG1"}),
-            _Device({"device": "a1_b9", "name": "601-612", "project_id": "p2", "project_name": "??????", "project_code_name": "plyh", "tg": "TG2"}),
-            _Device({"device": "b1_b14", "name": "??? AA3-1 ????", "project_id": "p3", "project_name": "?????????", "project_code_name": "iot-energy", "tg": "TG233"}),
+            _Device({"device": "a1_b9", "name": "B2柜", "project_id": "p1", "project_name": "中国能建集团数据机房监控项目", "project_code_name": "ceec", "tg": "TG1"}),
+            _Device({"device": "a1_b9", "name": "601-612", "project_id": "p2", "project_name": "平陆运河项目", "project_code_name": "plyh", "tg": "TG2"}),
+            _Device({"device": "b1_b14", "name": "电子楼 AA3-1 电源进线", "project_id": "p3", "project_name": "智慧物联网能效平台", "project_code_name": "iot-energy", "tg": "TG233"}),
         ]
 
     monkeypatch.setattr(app_module.metadata_engine, "list_all_devices", fake_list_all_devices)
@@ -274,9 +353,9 @@ def test_build_resolved_scope_fills_missing_devices_from_metadata_catalog(monkey
             _DummyDevice(
                 {
                     "device": "a1_b9",
-                    "name": "B2?",
+                    "name": "B2柜",
                     "project_id": "p1",
-                    "project_name": "??????????????",
+                    "project_name": "中国能建集团数据机房监控项目",
                     "project_code_name": "cneec-room",
                     "tg": "TG232",
                 }
@@ -284,9 +363,9 @@ def test_build_resolved_scope_fills_missing_devices_from_metadata_catalog(monkey
             _DummyDevice(
                 {
                     "device": "b1_b14",
-                    "name": "??? AA3-1 ????",
+                    "name": "电子楼 AA3-1 电源进线",
                     "project_id": "p2",
-                    "project_name": "?????????",
+                    "project_name": "智慧物联网能效平台",
                     "project_code_name": "iot-energy",
                     "tg": "TG233",
                 }
@@ -302,9 +381,9 @@ def test_build_resolved_scope_fills_missing_devices_from_metadata_catalog(monkey
         alias_memory={
             "a1_b9": {
                 "device": "a1_b9",
-                "name": "B2?",
+                "name": "B2柜",
                 "project_id": "p1",
-                "project_name": "??????????????",
+                "project_name": "中国能建集团数据机房监控项目",
                 "project_code_name": "cneec-room",
                 "tg": "TG232",
                 "alias": "a1_b9",
@@ -327,31 +406,31 @@ def test_prepare_chat_context_learns_device_code_scope_variant() -> None:
     app_module = _load_app_module()
 
     request = app_module.ChatRequest(
-        message="????",
+        message="确认这个范围",
         history=[],
         session_id="session-scope-1",
         alias_confirmation={
-            "alias": "B2?",
-            "keyword": "B2?",
+            "alias": "B2柜",
+            "keyword": "B2柜",
             "device": "a1_b9",
-            "name": "B2?",
+            "name": "B2柜",
             "project_id": "p1",
-            "project_name": "??????????????",
+            "project_name": "中国能建集团数据机房监控项目",
             "project_code_name": "ceec-dc",
             "device_type": "meter",
             "tg": "TG232",
-            "original_question": "a1_b9 ??2024?1????????",
+            "original_question": "a1_b9 在2024年1月的电压是多少",
         },
     )
 
     context = app_module._prepare_chat_context(request)
     alias_memory = context["alias_memory"]
 
-    assert app_module._normalize_alias_key("B2?") in alias_memory
+    assert app_module._normalize_alias_key("B2柜") in alias_memory
     assert app_module._normalize_alias_key("a1_b9") in alias_memory
-    assert alias_memory[app_module._normalize_alias_key("a1_b9")]["project_name"] == "??????????????"
+    assert alias_memory[app_module._normalize_alias_key("a1_b9")]["project_name"] == "中国能建集团数据机房监控项目"
     assert alias_memory[app_module._normalize_alias_key("a1_b9")]["tg"] == "TG232"
-    assert context["effective_message"] == "a1_b9 ??2024?1????????"
+    assert context["effective_message"] == "a1_b9 在2024年1月的电压是多少"
 
 
 
@@ -405,7 +484,7 @@ def test_chat_stream_complete_event_includes_table_preview(monkeypatch) -> None:
     scripted_events = [
         {
             "type": "final_answer",
-            "response": "????",
+            "response": "已返回结果",
             "show_table": True,
             "table_type": "sensor_data",
             "query_params": {
@@ -414,7 +493,7 @@ def test_chat_stream_complete_event_includes_table_preview(monkeypatch) -> None:
                 "end_time": "2024-01-01",
                 "data_type": "ua",
             },
-            "analysis": {"mode": "single", "analysis_scope_label": "?????"},
+            "analysis": {"mode": "single", "analysis_scope_label": "a2_b1"},
             "chart_specs": [],
             "show_charts": False,
             "table_preview": {
@@ -426,9 +505,9 @@ def test_chat_stream_complete_event_includes_table_preview(monkeypatch) -> None:
                 "total_pages": 18,
                 "has_more": True,
                 "focused_table": {
-                    "headers": ["??", "??"],
-                    "rows": [{"??": "A????ua????", "??": "230.50 V"}],
-                    "view_label": "????",
+                    "headers": ["指标", "结果"],
+                    "rows": [{"指标": "A相电压 ua 平均值", "结果": "230.50 V"}],
+                    "view_label": "问题直答",
                 },
             },
             "total_duration_ms": 22,
@@ -444,7 +523,7 @@ def test_chat_stream_complete_event_includes_table_preview(monkeypatch) -> None:
     monkeypatch.setattr(app_module, "_create_chat_agent", lambda **_kwargs: FakeAgent())
 
     with TestClient(app_module.app) as client:
-        response = client.post("/api/chat/stream", json={"message": "a2_b1?2024?1?1??ua???", "history": []})
+        response = client.post("/api/chat/stream", json={"message": "a2_b1在2024年1月1日的ua是多少", "history": []})
 
     assert response.status_code == 200
     events = _parse_sse_events(response.text)
@@ -452,4 +531,4 @@ def test_chat_stream_complete_event_includes_table_preview(monkeypatch) -> None:
     assert complete_event["type"] == "complete"
     assert complete_event["table_preview"] is not None
     assert complete_event["table_preview"]["data"][0]["tag"] == "ua"
-    assert complete_event["table_preview"]["focused_table"]["view_label"] == "????"
+    assert complete_event["table_preview"]["focused_table"]["view_label"] == "问题直答"

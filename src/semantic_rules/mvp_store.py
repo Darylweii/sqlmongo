@@ -213,7 +213,7 @@ class SemanticRuleStore:
         if scope_type not in _ALLOWED_SCOPE_TYPES:
             raise ValueError("scope_type 仅支持 system / project / user")
         if status not in _ALLOWED_STATUS:
-                    raise ValueError("status ??? enabled / disabled")
+            raise ValueError("status 仅支持 enabled / disabled")
 
         return {
             "id": base.get("id") or uuid4().hex,
@@ -299,7 +299,7 @@ class SemanticRuleStore:
                     continue
                 next_status = str(status or ("disabled" if rule.get("status") == "enabled" else "enabled")).strip().lower()
                 if next_status not in _ALLOWED_STATUS:
-                    raise ValueError("status ??? enabled / disabled")
+                    raise ValueError("status 仅支持 enabled / disabled")
                 updated = dict(rule)
                 updated["status"] = next_status
                 updated["updated_at"] = datetime.now().isoformat()

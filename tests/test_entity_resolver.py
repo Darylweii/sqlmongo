@@ -9,10 +9,10 @@ class _DummyMetadataEngine:
 def _candidate(*, source: str = "lexical", score: float = 96.0, fields=None) -> ResolvedEntityCandidate:
     return ResolvedEntityCandidate(
         device="a1_b9",
-        name="B2?",
+        name="B2柜",
         device_type="meter",
         project_id="p1",
-        project_name="??????????????",
+        project_name="中国能建集团数据机房监控项目",
         project_code_name="ceec-dc",
         tg="TG232",
         match_score=score,
@@ -53,8 +53,8 @@ def test_entity_resolver_uses_semantic_only_when_lexical_is_weak() -> None:
     semantic_calls = []
     resolver._search_semantic = lambda query, top_k: semantic_calls.append((query, top_k)) or [_candidate(source="semantic", score=82.0, fields=["semantic"])]
 
-    result = resolver.search_device_candidates("???", top_k=5)
+    result = resolver.search_device_candidates("空调", top_k=5)
 
-    assert semantic_calls == [("???", 8)]
+    assert semantic_calls == [("空调", 8)]
     assert result.query_info["semantic_used"] is True
     assert result.query_info["semantic_strategy"] == "enabled"

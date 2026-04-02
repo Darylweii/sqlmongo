@@ -384,7 +384,7 @@ def test_query_endpoint_passes_tg_values_to_fetcher(monkeypatch) -> None:
                 "data_type": "u_line",
                 "page": 1,
                 "page_size": 50,
-                "user_query": "a1_b9 ????",
+                "user_query": "a1_b9 今天的线电压数据",
             },
         )
 
@@ -431,9 +431,9 @@ def test_query_endpoint_passes_query_plan_to_fetcher_for_phase_tags(monkeypatch)
                 "data_type": "u_line",
                 "page": 1,
                 "page_size": 50,
-                "user_query": "a2_b1?2024?1?1??ua???",
+                "user_query": "a2_b1在2024年1月1日的ua是多少",
                 "query_plan": {
-                    "current_question": "a2_b1?2024?1?1??ua???",
+                    "current_question": "a2_b1在2024年1月1日的ua是多少",
                     "query_mode": "sensor_query",
                     "inferred_data_type": "u_line",
                     "explicit_device_codes": ["a2_b1"],

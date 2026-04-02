@@ -17,7 +17,7 @@ def test_synthesizer_prefers_focused_anomaly_response_without_llm() -> None:
     node = SynthesizerNode(llm)
 
     state = {
-        "user_query": "a1_b9 ????????????",
+        "user_query": "a1_b9 的异常时间点有哪些",
         "history": [],
         "total_count": 6,
         "raw_data": [
@@ -29,7 +29,7 @@ def test_synthesizer_prefers_focused_anomaly_response_without_llm() -> None:
             {"logTime": "2024-01-01 05:00:00", "val": 229, "device": "a1_b9", "tag": "ua"},
         ],
         "query_plan": {
-            "current_question": "a1_b9 ????????????",
+            "current_question": "a1_b9 的异常时间点有哪些",
             "query_mode": "anomaly_points",
             "inferred_data_type": "u_line",
             "search_targets": ["a1_b9"],
@@ -45,5 +45,5 @@ def test_synthesizer_prefers_focused_anomaly_response_without_llm() -> None:
 
     assert llm.calls == 0
     assert result["show_table"] is True
-    assert "?????" in result["final_response"]
+    assert "异常" in result["final_response"]
     assert "2024-01-01 03:00" in result["final_response"]

@@ -1,5 +1,6 @@
 from src.agent.orchestrator import LLMAgent
 from src.agent.query_entities import parse_query_entities
+from src.agent.query_plan_state import get_comparison_targets_from_state
 
 
 def make_agent() -> LLMAgent:
@@ -38,6 +39,26 @@ def test_parse_multiple_explicit_device_codes() -> None:
     assert parsed.has_comparison_intent is True
     assert parsed.explicit_device_codes == ("a9_b6", "a1_b7", "a2_b14", "a1_b9")
     assert parsed.search_targets == parsed.explicit_device_codes
+
+
+def test_parse_comparison_targets_preserves_duplicate_slots() -> None:
+    parsed = parse_query_entities("\u5bf9\u6bd4\u4e00\u4e0b a1_b9 \u548c a2_b1 \u548c a3_b2 \u4ee5\u53ca a3_b2 \u7684\u7535\u538b\u6570\u636e")
+    assert parsed.has_comparison_intent is True
+    assert parsed.explicit_device_codes == ("a1_b9", "a2_b1", "a3_b2", "a3_b2")
+    assert parsed.search_targets == ("a1_b9", "a2_b1", "a3_b2", "a3_b2")
+
+
+def test_get_comparison_targets_from_state_preserves_duplicate_slots() -> None:
+    targets = get_comparison_targets_from_state(
+        {
+            "query_plan": {
+                "query_mode": "comparison",
+                "has_comparison_intent": True,
+                "search_targets": ["a1_b9", "a2_b1", "a3_b2", "a3_b2"],
+            }
+        }
+    )
+    assert targets == ["a1_b9", "a2_b1", "a3_b2", "a3_b2"]
 
 
 def test_parse_single_explicit_device_code_keeps_stable_target() -> None:

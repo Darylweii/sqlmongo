@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+
+from src.charts.chart_planner import plan_chart_specs
+from src.charts.chart_registry import build_chart_specs_from_plan
+from src.charts.chart_types import CHART_TYPE_LABELS
 
 
 DATA_TYPE_NAMES = {
@@ -42,36 +47,11 @@ DATA_TYPE_UNITS = {
     "loadrate": "%",
 }
 
+ANOMALY_HINTS = ("异常", "离群", "波动点", "散点")
+DISTRIBUTION_HINTS = ("稳定", "波动", "分布", "箱线")
+
 
 class InsightEngine:
-    @classmethod
-    def _infer_analysis_scope(cls, normalized: List[Dict[str, Any]], data_type: str) -> Tuple[Optional[str], Optional[str]]:
-        normalized_type = str(data_type or "").strip().lower()
-        tags = {str(item.get("tag") or "").strip().lower() for item in (normalized or []) if str(item.get("tag") or "").strip()}
-
-        single_phase_tags = {"ua", "ub", "uc", "ia", "ib", "ic"}
-        three_phase_voltage_tags = {"ua", "ub", "uc"}
-        three_phase_current_tags = {"ia", "ib", "ic"}
-
-        if normalized_type in single_phase_tags:
-            return "single_phase", "按单相分析"
-
-        if normalized_type == "u_line" and tags and tags <= three_phase_voltage_tags:
-            return (
-                ("three_phase_joint", "按三相联合分析")
-                if len(tags) >= 2
-                else ("single_phase", "按单相分析")
-            )
-
-        if normalized_type == "i" and tags and tags <= three_phase_current_tags:
-            return (
-                ("three_phase_joint", "按三相联合分析")
-                if len(tags) >= 2
-                else ("single_phase", "按单相分析")
-            )
-
-        return None, None
-
     @classmethod
     def build(
         cls,
@@ -81,16 +61,168 @@ class InsightEngine:
         device_codes: Optional[List[str]] = None,
         device_names: Optional[Dict[str, str]] = None,
         user_query: str = "",
+        comparison_slots: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
         normalized = cls._normalize_records(records or [])
         if not normalized:
             return None, []
 
+        analysis = cls.build_analysis(
+            normalized_records=normalized,
+            statistics=statistics or cls._compute_stats(normalized),
+            data_type=data_type,
+            device_codes=device_codes,
+            device_names=device_names,
+            user_query=user_query,
+            comparison_slots=comparison_slots,
+        )
+        chart_specs = cls.build_chart_specs(
+            normalized_records=normalized,
+            analysis=analysis,
+            data_type=data_type,
+            device_names=device_names,
+            user_query=user_query,
+            comparison_slots=comparison_slots,
+        )
+        return analysis, chart_specs
+
+    @classmethod
+    def build_analysis(
+        cls,
+        *,
+        normalized_records: List[Dict[str, Any]],
+        statistics: Optional[Dict[str, Any]],
+        data_type: str = "ep",
+        device_codes: Optional[List[str]] = None,
+        device_names: Optional[Dict[str, str]] = None,
+        user_query: str = "",
+        comparison_slots: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        normalized = list(normalized_records or [])
+        if not normalized:
+            return None
+
         unique_devices = sorted({item["device"] for item in normalized if item.get("device")})
-        devices = device_codes or unique_devices
-        if len(set(devices or unique_devices)) > 1 or len(unique_devices) > 1:
-            return cls._build_comparison_analysis(normalized, data_type, device_names, user_query)
-        return cls._build_single_analysis(normalized, statistics or cls._compute_stats(normalized), data_type, device_names, user_query)
+        devices = [str(code).strip() for code in (device_codes or unique_devices) if str(code).strip()]
+        has_multi_slot = len(comparison_slots or []) > 1
+        if has_multi_slot or len(set(devices or unique_devices)) > 1 or len(unique_devices) > 1:
+            return cls._build_comparison_analysis(normalized, data_type, device_names, comparison_slots)
+        return cls._build_single_analysis(normalized, statistics or cls._compute_stats(normalized), data_type)
+
+    @classmethod
+    def build_chart_specs(
+        cls,
+        *,
+        normalized_records: List[Dict[str, Any]],
+        analysis: Optional[Dict[str, Any]],
+        data_type: str = "ep",
+        device_names: Optional[Dict[str, str]] = None,
+        user_query: str = "",
+        comparison_slots: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        if not normalized_records or not analysis:
+            return []
+        chart_plans = plan_chart_specs(
+            normalized_records=normalized_records,
+            analysis=analysis,
+            data_type=data_type,
+            device_names=device_names,
+            user_query=user_query,
+            comparison_slots=comparison_slots,
+        )
+        return build_chart_specs_from_plan(
+            normalized_records=normalized_records,
+            analysis=analysis,
+            data_type=data_type,
+            device_names=device_names,
+            chart_plans=chart_plans,
+        )
+
+    @classmethod
+    def build_chart_context(
+        cls,
+        *,
+        normalized_records: List[Dict[str, Any]],
+        analysis: Optional[Dict[str, Any]],
+        chart_specs: Optional[List[Dict[str, Any]]],
+        user_query: str = "",
+        comparison_slots: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not normalized_records or not analysis:
+            return None
+
+        available_chart_types = ["line", "bar", "boxplot", "scatter", "heatmap"]
+        query_kind = cls._infer_query_kind(analysis, user_query, comparison_slots)
+        recommended_chart_types = cls._build_recommended_chart_types(query_kind)
+        anomaly_count = len(analysis.get("anomalies") or [])
+        total_count = max(len(normalized_records), 1)
+        recommended_chart_type = str((chart_specs or [{}])[0].get("chart_type") or "").strip().lower()
+        if recommended_chart_type not in available_chart_types:
+            recommended_chart_type = recommended_chart_types[0]
+
+        return {
+            "chartable": True,
+            "query_kind": query_kind,
+            "data_signature": cls._build_data_signature(normalized_records),
+            "supports_follow_up_chart": True,
+            "recommended_chart_type": recommended_chart_type,
+            "recommended_chart_types": recommended_chart_types,
+            "available_chart_types": available_chart_types,
+            "comparison_slot_count": len(comparison_slots or []),
+            "comparison_slots": list(comparison_slots or []),
+            "anomaly_summary": {
+                "has_anomalies": anomaly_count > 0,
+                "anomaly_count": anomaly_count,
+                "anomaly_ratio": round(anomaly_count / total_count * 100, 2),
+            },
+            "follow_up_suggestions": cls._build_follow_up_suggestions(query_kind),
+        }
+
+    @classmethod
+    def build_comparison_slots(
+        cls,
+        *,
+        comparison_targets: Optional[List[str]],
+        comparison_scope_groups: Optional[Dict[str, List[Dict[str, Any]]]],
+        device_names: Optional[Dict[str, str]] = None,
+    ) -> List[Dict[str, Any]]:
+        slots: List[Dict[str, Any]] = []
+        targets = [str(target).strip() for target in (comparison_targets or []) if str(target).strip()]
+        groups = comparison_scope_groups if isinstance(comparison_scope_groups, dict) else {}
+        for index, raw_target in enumerate(targets, start=1):
+            scope_rows = groups.get(raw_target) if isinstance(groups.get(raw_target), list) else []
+            resolved_row = next((row for row in scope_rows if isinstance(row, dict) and row.get("device")), None)
+            resolved_device_code = str((resolved_row or {}).get("device") or raw_target).strip()
+            resolved_device_name = str((resolved_row or {}).get("name") or (device_names or {}).get(resolved_device_code) or resolved_device_code).strip()
+            slots.append(
+                {
+                    "slot_id": f"slot_{index}",
+                    "ordinal": index,
+                    "raw_target": raw_target,
+                    "resolved_device_code": resolved_device_code,
+                    "resolved_device_name": resolved_device_name,
+                    "project_name": str((resolved_row or {}).get("project_name") or "").strip() or None,
+                    "tg": str((resolved_row or {}).get("tg") or "").strip() or None,
+                    "status": "resolved" if resolved_device_code else "pending",
+                }
+            )
+        return slots
+
+    @classmethod
+    def _infer_analysis_scope(cls, normalized: List[Dict[str, Any]], data_type: str) -> Tuple[Optional[str], Optional[str]]:
+        normalized_type = str(data_type or "").strip().lower()
+        tags = {str(item.get("tag") or "").strip().lower() for item in normalized if str(item.get("tag") or "").strip()}
+        single_phase_tags = {"ua", "ub", "uc", "ia", "ib", "ic"}
+        three_phase_voltage_tags = {"ua", "ub", "uc"}
+        three_phase_current_tags = {"ia", "ib", "ic"}
+
+        if normalized_type in single_phase_tags:
+            return "single_phase", "按单相分析"
+        if normalized_type == "u_line" and tags and tags <= three_phase_voltage_tags:
+            return ("three_phase_joint", "按三相联合分析") if len(tags) >= 2 else ("single_phase", "按单相分析")
+        if normalized_type == "i" and tags and tags <= three_phase_current_tags:
+            return ("three_phase_joint", "按三相联合分析") if len(tags) >= 2 else ("single_phase", "按单相分析")
+        return None, None
 
     @classmethod
     def _build_single_analysis(
@@ -98,14 +230,12 @@ class InsightEngine:
         normalized: List[Dict[str, Any]],
         statistics: Dict[str, Any],
         data_type: str,
-        device_names: Optional[Dict[str, str]],
-        user_query: str,
-    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    ) -> Dict[str, Any]:
         values = [item["value"] for item in normalized]
         unit = DATA_TYPE_UNITS.get(data_type, "")
         metric_name = DATA_TYPE_NAMES.get(data_type, data_type)
         analysis_scope_mode, analysis_scope_label = cls._infer_analysis_scope(normalized, data_type)
-        q1, median, q3 = cls._quartiles(values)
+        q1, _, q3 = cls._quartiles(values)
         anomaly_points = cls._detect_anomaly_points(normalized, q1, q3)
         peak_point = max(normalized, key=lambda item: item["value"])
         valley_point = min(normalized, key=lambda item: item["value"])
@@ -144,11 +274,7 @@ class InsightEngine:
                 "gap": peak_gap,
             },
             "anomalies": [
-                {
-                    "time": item["time_label"],
-                    "value": item["value"],
-                    "device": item["device"],
-                }
+                {"time": item["time_label"], "value": item["value"], "device": item["device"]}
                 for item in anomaly_points[:8]
             ],
         }
@@ -162,29 +288,10 @@ class InsightEngine:
                 "valley_hour": valley_hour["hour"],
                 "valley_value": valley_hour["avg_value"],
             }
-            analysis["insights"].append(
-                f"从小时分布看，{peak_hour['hour']} 时附近更接近高峰，{valley_hour['hour']} 时附近更接近低谷。"
-            )
+            analysis["insights"].append(f"从小时分布看，{peak_hour['hour']} 时附近更接近高峰，{valley_hour['hour']} 时附近更接近低谷。")
         if anomaly_points:
-            analysis["insights"].append(
-                f"共识别 {len(anomaly_points)} 个异常点，可优先复核峰值附近时段和现场运行状态。"
-            )
-
-        chart_specs = [
-            {
-                "id": "trend-line",
-                "title": f"{metric_name}趋势图",
-                "height": 360,
-                "option": cls._build_single_line_option(normalized, data_type, anomaly_points),
-            },
-            {
-                "id": "hourly-bar",
-                "title": f"{metric_name}分时均值",
-                "height": 320,
-                "option": cls._build_hourly_bar_option(time_distribution, metric_name, unit),
-            },
-        ]
-        return analysis, [spec for spec in chart_specs if spec.get("option")]
+            analysis["insights"].append(f"共识别 {len(anomaly_points)} 个异常点，可优先复核峰值附近时段和现场运行状态。")
+        return analysis
 
     @classmethod
     def _build_comparison_analysis(
@@ -192,27 +299,42 @@ class InsightEngine:
         normalized: List[Dict[str, Any]],
         data_type: str,
         device_names: Optional[Dict[str, str]],
-        user_query: str,
-    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        comparison_slots: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         unit = DATA_TYPE_UNITS.get(data_type, "")
         metric_name = DATA_TYPE_NAMES.get(data_type, data_type)
-        grouped: Dict[str, List[Dict[str, Any]]] = {}
-        for item in normalized:
-            grouped.setdefault(item["device"], []).append(item)
-        device_stats: Dict[str, Dict[str, Any]] = {device: cls._compute_stats(items) for device, items in grouped.items()}
-        pretty_names = {device: cls._display_name(device, device_names) for device in grouped}
+
+        if comparison_slots and len(comparison_slots) > 1:
+            grouped: Dict[str, List[Dict[str, Any]]] = {}
+            for slot in comparison_slots:
+                slot_id = str(slot.get("slot_id") or "").strip()
+                if not slot_id:
+                    continue
+                resolved_device_code = str(slot.get("resolved_device_code") or slot.get("raw_target") or "").strip()
+                resolved_tg = str(slot.get("tg") or "").strip()
+                grouped[slot_id] = [
+                    item for item in normalized
+                    if str(item.get("device") or "").strip() == resolved_device_code
+                    and (not resolved_tg or not str(item.get("tg") or "").strip() or str(item.get("tg") or "").strip() == resolved_tg)
+                ]
+            pretty_names = {str(slot.get("slot_id")): cls._slot_display_name(slot) for slot in comparison_slots if str(slot.get("slot_id") or "").strip()}
+        else:
+            grouped = {}
+            for item in normalized:
+                grouped.setdefault(item["device"], []).append(item)
+            pretty_names = {device: cls._display_name(device, device_names) for device in grouped}
+
+        device_stats: Dict[str, Dict[str, Any]] = {
+            key: cls._compute_stats(items) if items else {"avg": 0, "sum": 0, "max": 0, "min": 0, "cv": 0, "trend": "无数据", "anomaly_ratio": 0}
+            for key, items in grouped.items()
+        }
         avg_ranking = sorted(device_stats.items(), key=lambda item: item[1].get("avg", 0), reverse=True)
         sum_ranking = sorted(device_stats.items(), key=lambda item: item[1].get("sum", 0), reverse=True)
         stable_ranking = sorted(device_stats.items(), key=lambda item: item[1].get("cv", float("inf")))
         anomaly_ranking = sorted(device_stats.items(), key=lambda item: item[1].get("anomaly_ratio", 0), reverse=True)
-        rank_display_limit = 8
 
         def ranking_names(items: List[Tuple[str, Dict[str, Any]]]) -> str:
-            visible_items = items if len(items) <= rank_display_limit else items[:rank_display_limit]
-            content = " > ".join(pretty_names[item[0]] for item in visible_items)
-            if len(items) > rank_display_limit:
-                content += f" > ...（共 {len(items)} 个设备）"
-            return content
+            return " > ".join(pretty_names[item[0]] for item in items[:8])
 
         top_avg_device, top_avg_stats = avg_ranking[0]
         top_sum_device, top_sum_stats = sum_ranking[0]
@@ -229,9 +351,9 @@ class InsightEngine:
                 {"label": "异常最多", "value": pretty_names[anomaly_ranking[0][0]], "detail": f"{anomaly_ranking[0][1].get('anomaly_ratio', 0)}%"},
             ],
             "insights": [
-                f"均值排名：" + ranking_names(avg_ranking),
-                f"总量排名：" + ranking_names(sum_ranking),
-                f"稳定性排名：" + ranking_names(stable_ranking) + "（CV 越低越稳定）",
+                f"均值排名：{ranking_names(avg_ranking)}",
+                f"总量排名：{ranking_names(sum_ranking)}",
+                f"稳定性排名：{ranking_names(stable_ranking)}（CV 越低越稳定）",
                 f"异常占比最高的是 {pretty_names[anomaly_ranking[0][0]]}，约为 {anomaly_ranking[0][1].get('anomaly_ratio', 0)}%。",
             ],
             "rankings": {
@@ -241,7 +363,7 @@ class InsightEngine:
             },
             "devices": [
                 {
-                    "name": pretty_names[device],
+                    "name": pretty_names[key],
                     "avg": stats.get("avg", 0),
                     "sum": stats.get("sum", 0),
                     "max": stats.get("max", 0),
@@ -250,21 +372,10 @@ class InsightEngine:
                     "trend": stats.get("trend", "平稳"),
                     "anomaly_ratio": stats.get("anomaly_ratio", 0),
                 }
-                for device, stats in device_stats.items()
+                for key, stats in device_stats.items()
             ],
         }
-
-        line_option = cls._build_comparison_line_option(grouped, data_type, device_names)
-        bar_option = cls._build_comparison_bar_option(device_stats, metric_name, unit, device_names)
-        radar_option = cls._build_radar_option(device_stats, device_names)
-        boxplot_option = cls._build_boxplot_option(grouped, data_type, device_names)
-        chart_specs = [
-            {"id": "comparison-line", "title": f"{metric_name}趋势对比", "height": 380, "option": line_option},
-            {"id": "comparison-bar", "title": f"{metric_name}均值/总量对比", "height": 360, "option": bar_option},
-            {"id": "comparison-radar", "title": f"多维指标雷达图", "height": 360, "option": radar_option},
-            {"id": "comparison-boxplot", "title": f"分布箱线图", "height": 360, "option": boxplot_option},
-        ]
-        return analysis, [spec for spec in chart_specs if spec.get("option")]
+        return analysis
 
     @classmethod
     def _normalize_records(cls, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -277,15 +388,32 @@ class InsightEngine:
             if value is None or time_value in (None, ""):
                 continue
             dt = cls._parse_datetime(time_value)
-            normalized.append({
-                "time": dt,
-                "time_label": cls._format_time(dt),
-                "time_value": dt.isoformat(),
-                "device": str(item.get("device") or item.get("deviceName") or "未知设备"),
-                "tag": str(item.get("tag") or ""),
-                "value": float(value),
-            })
-        normalized.sort(key=lambda item: item["time"])
+            normalized.append(
+                {
+                    "time": dt,
+                    "time_label": cls._format_time(dt),
+                    "time_value": dt.isoformat(),
+                    "device": str(item.get("device") or item.get("deviceName") or "未知设备"),
+                    "tag": str(item.get("tag") or ""),
+                    "tg": str(item.get("tg") or "").strip() or None,
+                    "value": float(value),
+                }
+            )
+        normalized.sort(key=lambda item: (item["time"], item["device"], item.get("tag") or ""))
+        if normalized:
+            values = [item["value"] for item in normalized]
+            q1, _, q3 = cls._quartiles(values)
+            anomaly_pairs = {
+                (item["time_value"], item["device"], item.get("tag") or "", item["value"])
+                for item in cls._detect_anomaly_points(normalized, q1, q3)
+            }
+            for item in normalized:
+                item["is_anomaly"] = (
+                    item["time_value"],
+                    item["device"],
+                    item.get("tag") or "",
+                    item["value"],
+                ) in anomaly_pairs
         return normalized
 
     @classmethod
@@ -327,221 +455,16 @@ class InsightEngine:
         }
 
     @classmethod
-    def _build_single_line_option(cls, records: List[Dict[str, Any]], data_type: str, anomaly_points: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        if not records:
-            return None
-        unit = DATA_TYPE_UNITS.get(data_type, "")
-        metric_name = DATA_TYPE_NAMES.get(data_type, data_type)
-        points = cls._downsample_points(records)
-        anomaly_pairs = [[item["time_value"], item["value"]] for item in anomaly_points[:30]]
-        series = [
-            {
-                "name": metric_name,
-                "type": "line",
-                "smooth": True,
-                "showSymbol": False,
-                "data": [[item["time_value"], item["value"]] for item in points],
-                "markPoint": {"data": [{"type": "max", "name": "最大值"}, {"type": "min", "name": "最小值"}]},
-                "markLine": {"data": [{"type": "average", "name": "平均值"}]},
-            }
-        ]
-        if anomaly_pairs:
-            series.append(
-                {
-                    "name": "异常点",
-                    "type": "scatter",
-                    "symbolSize": 10,
-                    "itemStyle": {"color": "#ef4444"},
-                    "data": anomaly_pairs,
-                }
-            )
-        return {
-            "tooltip": {"trigger": "axis"},
-            "legend": {"data": [item["name"] for item in series]},
-            "grid": {"left": 40, "right": 24, "top": 48, "bottom": 48},
-            "xAxis": {"type": "time"},
-            "yAxis": {"type": "value", "name": unit},
-            "series": series,
-        }
-
-    @classmethod
-    def _build_hourly_bar_option(cls, time_distribution: Optional[List[Dict[str, Any]]], metric_name: str, unit: str) -> Optional[Dict[str, Any]]:
-        if not time_distribution:
-            return None
-        return {
-            "tooltip": {"trigger": "axis"},
-            "grid": {"left": 40, "right": 24, "top": 32, "bottom": 36},
-            "xAxis": {"type": "category", "data": [item["hour"] for item in time_distribution]},
-            "yAxis": {"type": "value", "name": unit},
-            "series": [
-                {
-                    "name": f"平均{metric_name}",
-                    "type": "bar",
-                    "data": [item["avg_value"] for item in time_distribution],
-                    "itemStyle": {"color": "#6366f1"},
-                }
-            ],
-        }
-
-    @classmethod
-    def _build_comparison_line_option(
-        cls,
-        grouped: Dict[str, List[Dict[str, Any]]],
-        data_type: str,
-        device_names: Optional[Dict[str, str]],
-    ) -> Optional[Dict[str, Any]]:
-        if not grouped:
-            return None
-        unit = DATA_TYPE_UNITS.get(data_type, "")
-        legend = []
-        series = []
-        for device, records in grouped.items():
-            display_name = cls._display_name(device, device_names)
-            legend.append(display_name)
-            points = cls._downsample_points(records)
-            series.append({
-                "name": display_name,
-                "type": "line",
-                "smooth": True,
-                "showSymbol": False,
-                "data": [[item["time_value"], item["value"]] for item in points],
-            })
-        return {
-            "tooltip": {"trigger": "axis"},
-            "legend": {"data": legend},
-            "grid": {"left": 40, "right": 24, "top": 48, "bottom": 48},
-            "xAxis": {"type": "time"},
-            "yAxis": {"type": "value", "name": unit},
-            "series": series,
-        }
-
-    @classmethod
-    def _build_comparison_bar_option(
-        cls,
-        device_stats: Dict[str, Dict[str, Any]],
-        metric_name: str,
-        unit: str,
-        device_names: Optional[Dict[str, str]],
-    ) -> Optional[Dict[str, Any]]:
-        if not device_stats:
-            return None
-        labels = [cls._display_name(device, device_names) for device in device_stats]
-        return {
-            "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
-            "legend": {"data": ["平均值", "总量"]},
-            "grid": {"left": 48, "right": 24, "top": 48, "bottom": 36},
-            "xAxis": {"type": "category", "data": labels},
-            "yAxis": [
-                {"type": "value", "name": f"平均值({unit})"},
-                {"type": "value", "name": f"总量({unit})"},
-            ],
-            "series": [
-                {
-                    "name": "平均值",
-                    "type": "bar",
-                    "data": [device_stats[device].get("avg", 0) for device in device_stats],
-                    "itemStyle": {"color": "#6366f1"},
-                },
-                {
-                    "name": "总量",
-                    "type": "bar",
-                    "yAxisIndex": 1,
-                    "data": [device_stats[device].get("sum", 0) for device in device_stats],
-                    "itemStyle": {"color": "#10b981"},
-                },
-            ],
-        }
-
-    @classmethod
-    def _build_radar_option(cls, device_stats: Dict[str, Dict[str, Any]], device_names: Optional[Dict[str, str]]) -> Optional[Dict[str, Any]]:
-        if len(device_stats) < 2:
-            return None
-        series_data = []
-        max_avg = max((stats.get("avg", 0) for stats in device_stats.values()), default=1)
-        max_max = max((stats.get("max", 0) for stats in device_stats.values()), default=1)
-        max_sum = max((stats.get("sum", 0) for stats in device_stats.values()), default=1)
-        indicators = [
-            {"name": "平均值", "max": max_avg or 1},
-            {"name": "峰值", "max": max_max or 1},
-            {"name": "总量", "max": max_sum or 1},
-            {"name": "稳定性", "max": 100},
-            {"name": "异常率", "max": 100},
-        ]
-        for device, stats in device_stats.items():
-            series_data.append({
-                "name": cls._display_name(device, device_names),
-                "value": [
-                    stats.get("avg", 0),
-                    stats.get("max", 0),
-                    stats.get("sum", 0),
-                    max(0, round(100 - stats.get("cv", 0), 2)),
-                    max(0, round(100 - stats.get("anomaly_ratio", 0), 2)),
-                ],
-            })
-        return {
-            "tooltip": {},
-            "legend": {"data": [item["name"] for item in series_data]},
-            "radar": {"indicator": indicators, "radius": "60%"},
-            "series": [{"type": "radar", "data": series_data}],
-        }
-
-    @classmethod
-    def _build_boxplot_option(
-        cls,
-        grouped: Dict[str, List[Dict[str, Any]]],
-        data_type: str,
-        device_names: Optional[Dict[str, str]],
-    ) -> Optional[Dict[str, Any]]:
-        if len(grouped) < 2:
-            return None
-        labels = []
-        data = []
-        for device, records in grouped.items():
-            values = sorted(item["value"] for item in records)
-            if len(values) < 2:
-                continue
-            q1, median, q3 = cls._quartiles(values)
-            labels.append(cls._display_name(device, device_names))
-            data.append([
-                round(min(values), 2),
-                round(q1, 2),
-                round(median, 2),
-                round(q3, 2),
-                round(max(values), 2),
-            ])
-        if not data:
-            return None
-        unit = DATA_TYPE_UNITS.get(data_type, "")
-        return {
-            "tooltip": {"trigger": "item"},
-            "grid": {"left": 48, "right": 24, "top": 32, "bottom": 48},
-            "xAxis": {"type": "category", "data": labels},
-            "yAxis": {"type": "value", "name": unit},
-            "series": [{"type": "boxplot", "data": data}],
-        }
-
-    @classmethod
     def _hourly_distribution(cls, records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         buckets: Dict[str, List[float]] = {}
         for item in records:
             hour = item["time"].strftime("%H")
             buckets.setdefault(hour, []).append(item["value"])
-        result = [
+        return [
             {"hour": hour, "avg_value": round(sum(values) / len(values), 2)}
             for hour, values in sorted(buckets.items())
             if values
         ]
-        return result
-
-    @classmethod
-    def _downsample_points(cls, records: List[Dict[str, Any]], max_points: int = 180) -> List[Dict[str, Any]]:
-        if len(records) <= max_points:
-            return records
-        step = max(1, len(records) // max_points)
-        sampled = records[::step]
-        if sampled[-1] != records[-1]:
-            sampled.append(records[-1])
-        return sampled
 
     @classmethod
     def _detect_anomaly_points(cls, records: List[Dict[str, Any]], q1: float, q3: float) -> List[Dict[str, Any]]:
@@ -586,13 +509,7 @@ class InsightEngine:
         if isinstance(value, datetime):
             return value
         text = str(value)
-        for fmt in (
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M",
-            "%Y-%m-%d",
-            "%Y-%m",
-            "%Y",
-        ):
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y-%m", "%Y"):
             try:
                 return datetime.strptime(text, fmt)
             except ValueError:
@@ -615,6 +532,14 @@ class InsightEngine:
         return device
 
     @classmethod
+    def _slot_display_name(cls, slot: Dict[str, Any]) -> str:
+        ordinal = int(slot.get("ordinal") or 0)
+        raw_target = str(slot.get("raw_target") or slot.get("resolved_device_code") or "").strip()
+        if ordinal > 0 and raw_target:
+            return f"第{ordinal}项 {raw_target}"
+        return raw_target or "未命名对象"
+
+    @classmethod
     def _format_number(cls, value: Any, unit: str = "") -> str:
         if value is None:
             return "-"
@@ -633,3 +558,70 @@ class InsightEngine:
         if cv < 30:
             return "中"
         return "高"
+
+    @classmethod
+    def _infer_query_kind(
+        cls,
+        analysis: Dict[str, Any],
+        user_query: str,
+        comparison_slots: Optional[List[Dict[str, Any]]],
+    ) -> str:
+        compact = str(user_query or "").replace(" ", "")
+        if len(comparison_slots or []) > 1 or str(analysis.get("mode") or "") == "comparison":
+            return "comparison_series"
+        if any(keyword in compact for keyword in ANOMALY_HINTS):
+            return "anomaly_analysis"
+        if any(keyword in compact for keyword in DISTRIBUTION_HINTS):
+            return "distribution_analysis"
+        return "single_series"
+
+    @classmethod
+    def _build_recommended_chart_types(cls, query_kind: str) -> List[str]:
+        mapping = {
+            "single_series": ["line", "bar", "heatmap"],
+            "comparison_series": ["line", "bar", "boxplot"],
+            "anomaly_analysis": ["scatter", "line", "heatmap"],
+            "distribution_analysis": ["boxplot", "heatmap", "line"],
+        }
+        return mapping.get(query_kind, ["line", "bar", "heatmap"])
+
+    @classmethod
+    def _build_follow_up_suggestions(cls, query_kind: str) -> List[Dict[str, str]]:
+        mapping = {
+            "single_series": [
+                {"label": "趋势图", "chart_type": "line"},
+                {"label": "柱状图", "chart_type": "bar"},
+                {"label": "热力图", "chart_type": "heatmap"},
+            ],
+            "comparison_series": [
+                {"label": "趋势对比图", "chart_type": "line"},
+                {"label": "均值柱状图", "chart_type": "bar"},
+                {"label": "箱线分布图", "chart_type": "boxplot"},
+            ],
+            "anomaly_analysis": [
+                {"label": "异常散点图", "chart_type": "scatter"},
+                {"label": "趋势图", "chart_type": "line"},
+            ],
+            "distribution_analysis": [
+                {"label": "箱线图", "chart_type": "boxplot"},
+                {"label": "热力图", "chart_type": "heatmap"},
+            ],
+        }
+        return mapping.get(query_kind, [{"label": "趋势图", "chart_type": "line"}])
+
+    @classmethod
+    def _build_data_signature(cls, normalized_records: List[Dict[str, Any]]) -> str:
+        digest = hashlib.sha1()
+        for item in normalized_records[:2000]:
+            digest.update(
+                "|".join(
+                    [
+                        str(item.get("time_value") or ""),
+                        str(item.get("device") or ""),
+                        str(item.get("tag") or ""),
+                        str(item.get("tg") or ""),
+                        str(item.get("value") or ""),
+                    ]
+                ).encode("utf-8", errors="ignore")
+            )
+        return digest.hexdigest()

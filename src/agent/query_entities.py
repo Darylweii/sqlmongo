@@ -450,15 +450,11 @@ def _extract_project_scoped_device_listing_hint(current_question: str) -> Option
 
 
 def _extract_explicit_device_codes(user_query: str) -> Tuple[str, ...]:
-    seen = set()
     results = []
     for code in DEVICE_CODE_PATTERN.findall(user_query or ""):
         normalized = code.strip()
-        lookup = normalized.lower()
-        if lookup in seen:
-            continue
-        seen.add(lookup)
-        results.append(normalized)
+        if normalized:
+            results.append(normalized)
     return tuple(results)
 
 
@@ -527,16 +523,11 @@ def _extract_search_targets(current_question: str, comparison_mode: bool, explic
     else:
         segments = [base_text]
 
-    seen = set()
     results = []
     for segment in segments:
         normalized = normalize_search_target(segment)
         if not normalized:
             continue
-        lookup = normalized.lower()
-        if lookup in seen:
-            continue
-        seen.add(lookup)
         results.append(normalized)
 
     if results:

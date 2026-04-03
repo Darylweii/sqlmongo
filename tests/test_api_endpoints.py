@@ -44,6 +44,12 @@ def test_chat_endpoint_returns_steps_and_request_id(monkeypatch) -> None:
             "devices": None,
             "analysis": {"mode": "single"},
             "chart_specs": [{"id": "trend-line"}],
+            "chart_context": {
+                "chartable": True,
+                "query_kind": "single_series",
+                "recommended_chart_type": "line",
+                "follow_up_suggestions": [{"label": "趋势图", "chart_type": "line"}],
+            },
             "show_charts": True,
             "total_duration_ms": 31,
             "clarification_required": False,
@@ -67,6 +73,7 @@ def test_chat_endpoint_returns_steps_and_request_id(monkeypatch) -> None:
     assert payload["session_id"]
     assert payload["response"] == "query finished"
     assert payload["query_params"]["device_codes"] == ["a1_b9"]
+    assert payload["chart_context"]["query_kind"] == "single_series"
     assert payload["total_duration_ms"] == 31
     assert payload["clarification_required"] is False
     assert payload["steps"][0]["status"] == "done"
@@ -115,6 +122,12 @@ def test_query_endpoint_returns_transformed_sensor_rows(monkeypatch) -> None:
             "statistics": {"avg": 123.4},
             "analysis": {"mode": "single"},
             "chart_specs": [{"id": "trend-line"}],
+            "chart_context": {
+                "chartable": True,
+                "query_kind": "single_series",
+                "recommended_chart_type": "line",
+                "follow_up_suggestions": [{"label": "趋势图", "chart_type": "line"}],
+            },
             "show_charts": True,
             "is_sampled": False,
             "aggregation_type": None,
@@ -147,6 +160,7 @@ def test_query_endpoint_returns_transformed_sensor_rows(monkeypatch) -> None:
     ]
     assert payload["analysis"]["mode"] == "single"
     assert payload["chart_specs"][0]["id"] == "trend-line"
+    assert payload["chart_context"]["recommended_chart_type"] == "line"
 
 
 def test_query_endpoint_returns_focused_table_when_query_needs_direct_ranking(monkeypatch) -> None:
@@ -448,3 +462,40 @@ def test_query_endpoint_passes_query_plan_to_fetcher_for_phase_tags(monkeypatch)
     assert response.status_code == 200
     assert payload["success"] is True
     assert captured["query_plan"]["raw_plan"]["requested_tags"] == ["ua"]
+
+
+def test_delete_chat_history_endpoint_clears_current_user_messages() -> None:
+    app_module = _load_app_module()
+    app_module.user_memory_store.clear_chat_history(user_id="history-clean-user") if app_module.user_memory_store.list_chat_history(user_id="history-clean-user", limit=1) else None
+    app_module.user_memory_store.clear_chat_history(user_id="history-clean-keep") if app_module.user_memory_store.list_chat_history(user_id="history-clean-keep", limit=1) else None
+    app_module.user_memory_store.record_chat_message(
+        session_id="session-a",
+        user_id="history-clean-user",
+        role="user",
+        message="hello",
+        intent_type="chat",
+    )
+    app_module.user_memory_store.record_chat_message(
+        session_id="session-b",
+        user_id="history-clean-user",
+        role="assistant",
+        message="world",
+        intent_type="chat",
+    )
+    app_module.user_memory_store.record_chat_message(
+        session_id="session-c",
+        user_id="history-clean-keep",
+        role="user",
+        message="keep",
+        intent_type="chat",
+    )
+
+    with TestClient(app_module.app) as client:
+        response = client.delete("/api/chat/history", params={"user_id": "history-clean-user"})
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["success"] is True
+    assert payload["deleted_count"] >= 2
+    assert app_module.user_memory_store.list_chat_history(user_id="history-clean-user", limit=20) == []
+    assert len(app_module.user_memory_store.list_chat_history(user_id="history-clean-keep", limit=20)) == 1

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Mapping, Optional
 from src.agent.query_plan import QueryPlan, coerce_query_plan
 
 
-def _normalize_items(values: Any) -> List[str]:
+def _normalize_items(values: Any, *, dedupe: bool = True) -> List[str]:
     if values is None:
         return []
     if isinstance(values, (list, tuple, set)):
@@ -19,10 +19,11 @@ def _normalize_items(values: Any) -> List[str]:
         text = str(item or "").strip()
         if not text:
             continue
-        lowered = text.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
+        if dedupe:
+            lowered = text.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
         results.append(text)
     return results
 
@@ -70,16 +71,16 @@ def get_primary_target_from_state(state: Mapping[str, Any]) -> str:
 def get_comparison_targets_from_state(state: Mapping[str, Any]) -> List[str]:
     plan = get_query_plan_from_state(state)
     if plan and (plan.has_comparison_intent or len(plan.search_targets) > 1 or len(plan.explicit_device_codes) > 1):
-        targets = _normalize_items(plan.search_targets or plan.explicit_device_codes)
+        targets = _normalize_items(plan.search_targets or plan.explicit_device_codes, dedupe=False)
         if len(targets) > 1:
             return targets
 
-    state_targets = _normalize_items(state.get("comparison_targets"))
+    state_targets = _normalize_items(state.get("comparison_targets"), dedupe=False)
     if len(state_targets) > 1:
         return state_targets
 
     intent = get_intent_from_state(state)
-    intent_targets = _normalize_items(intent.get("comparison_targets"))
+    intent_targets = _normalize_items(intent.get("comparison_targets"), dedupe=False)
     if len(intent_targets) > 1:
         return intent_targets
 

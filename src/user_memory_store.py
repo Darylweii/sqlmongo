@@ -219,6 +219,29 @@ class UserMemoryStore:
             items.append(item)
         return items
 
+    def clear_chat_history(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> int:
+        clauses = []
+        params: List[Any] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(str(session_id).strip())
+        if user_id:
+            clauses.append("user_id = ?")
+            params.append(str(user_id).strip())
+        if not clauses:
+            raise ValueError("session_id 或 user_id 至少提供一个")
+        where_sql = f"WHERE {' AND '.join(clauses)}"
+        with self._lock:
+            with self._connect() as conn:
+                cursor = conn.execute(f"DELETE FROM chat_messages {where_sql}", params)
+                conn.commit()
+                return int(cursor.rowcount or 0)
+
     def upsert_alias_memory(
         self,
         *,

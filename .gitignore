@@ -48,6 +48,7 @@ htmlcov/
 *.log
 logs/
 tmp_*
+tmp/
 
 # Local runtime databases
 *.sqlite3

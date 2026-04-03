@@ -11,7 +11,8 @@ to query device and project metadata from MySQL database.
 from typing import List, Dict, Optional
 import logging
 
-from langchain.tools import tool
+def tool(func):
+    return func
 
 from src.metadata.metadata_engine import MetadataEngine, DeviceInfo
 from src.exceptions import DatabaseConnectionError, MetadataEngineError

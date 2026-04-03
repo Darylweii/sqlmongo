@@ -155,6 +155,10 @@ class DeviceSemanticSearch:
         """初始化索引和元数据"""
         try:
             import faiss
+        except ModuleNotFoundError:
+            logger.warning("FAISS 未安装，语义检索已降级为禁用状态")
+            return False
+        try:
             
             # 检查文件是否存在
             if not Path(self.index_path).exists():
@@ -250,6 +254,11 @@ class DeviceSemanticSearch:
         
         try:
             import faiss
+        except ModuleNotFoundError:
+            logger.warning("FAISS 未安装，跳过语义检索")
+            return []
+        
+        try:
             
             # 获取查询向量
             embedding = self._get_embedding(query)

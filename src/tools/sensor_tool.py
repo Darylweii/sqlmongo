@@ -11,7 +11,8 @@ import logging
 import json
 import re
 
-from langchain.tools import tool
+def tool(func):
+    return func
 from pymongo import MongoClient
 
 from src.router.collection_router import get_target_collections, get_collection_prefix, get_data_tags
@@ -240,6 +241,7 @@ CHART_INTENT_KEYWORDS = (
     "可视化",
     "折线图",
     "柱状图",
+    "散点图",
     "雷达图",
     "箱线图",
     "热力图",
@@ -904,9 +906,59 @@ def _has_chart_intent(user_query: str) -> bool:
         return True
     explicit_patterns = (
         r"(画|生成|绘制|做|出).{0,4}(图|图表)",
-        r"(可视化|趋势图|对比图|折线图|柱状图|雷达图|箱线图|热力图)",
+        r"(可视化|趋势图|对比图|折线图|柱状图|散点图|雷达图|箱线图|热力图)",
     )
     return any(re.search(pattern, text) for pattern in explicit_patterns)
+
+
+def _extract_comparison_targets_from_query_plan(query_plan: Optional[Dict[str, Any]], device_codes: List[str]) -> List[str]:
+    if isinstance(query_plan, dict):
+        raw_targets = query_plan.get("comparison_targets")
+        if isinstance(raw_targets, list):
+            normalized = [str(item).strip() for item in raw_targets if str(item or "").strip()]
+            if normalized:
+                return normalized
+        raw_search_targets = query_plan.get("search_targets")
+        if isinstance(raw_search_targets, list):
+            normalized = [str(item).strip() for item in raw_search_targets if str(item or "").strip()]
+            if len(normalized) > 1:
+                return normalized
+    normalized_codes = [str(item).strip() for item in (device_codes or []) if str(item or "").strip()]
+    return normalized_codes if len(normalized_codes) > 1 else []
+
+
+def _build_chart_context_from_sensor_result(
+    *,
+    records: List[Dict[str, Any]],
+    analysis: Optional[Dict[str, Any]],
+    chart_specs: Optional[List[Dict[str, Any]]],
+    data_type: str,
+    user_query: str,
+    device_codes: List[str],
+    device_names: Optional[Dict[str, str]] = None,
+    query_plan: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    normalized_records = InsightEngine._normalize_records(records or [])
+    if not normalized_records or not isinstance(analysis, dict):
+        return None
+
+    comparison_slots = InsightEngine.build_comparison_slots(
+        comparison_targets=_extract_comparison_targets_from_query_plan(query_plan, device_codes),
+        comparison_scope_groups=query_plan.get("comparison_scope_groups") if isinstance(query_plan, dict) else None,
+        device_names=device_names,
+    )
+    chart_context = InsightEngine.build_chart_context(
+        normalized_records=normalized_records,
+        analysis=analysis,
+        chart_specs=chart_specs,
+        user_query=user_query,
+        comparison_slots=comparison_slots,
+    )
+    if not isinstance(chart_context, dict):
+        return None
+    chart_context["cache_key"] = f"sensor:{datetime.now().isoformat()}"
+    chart_context["cache_hit"] = False
+    return chart_context
 
 
 @tool
@@ -967,6 +1019,14 @@ def fetch_sensor_data(
             sensor_result.statistics,
             device_codes=devices,
         )
+        chart_context = _build_chart_context_from_sensor_result(
+            records=sensor_result.data,
+            analysis=analysis,
+            chart_specs=chart_specs,
+            data_type="ep",
+            user_query="",
+            device_codes=devices,
+        )
 
         compressor = get_context_compressor()
         format_map = {
@@ -985,6 +1045,7 @@ def fetch_sensor_data(
             "statistics": sensor_result.statistics,
             "analysis": analysis,
             "chart_specs": chart_specs,
+            "chart_context": chart_context,
             "show_charts": False,
             "success": True,
             "query_info": _enrich_query_info_with_query_plan_context(
@@ -1159,12 +1220,18 @@ def fetch_sensor_data_with_components(
             value_filter=value_filter
         )
 
+        comparison_slots = InsightEngine.build_comparison_slots(
+            comparison_targets=_extract_comparison_targets_from_query_plan(query_plan, device_codes),
+            comparison_scope_groups=query_plan.get("comparison_scope_groups") if isinstance(query_plan, dict) else None,
+            device_names=None,
+        )
         analysis, chart_specs = InsightEngine.build(
             sensor_result.data,
             sensor_result.statistics,
             data_type=analysis_data_type,
             device_codes=device_codes,
             user_query=user_query,
+            comparison_slots=comparison_slots,
         )
         focused_result = _build_focused_result(sensor_result.data, analysis, user_query, analysis_data_type, query_plan=query_plan)
 
@@ -1185,6 +1252,15 @@ def fetch_sensor_data_with_components(
             compressed_data = compressor.compress(sensor_result.data, out_format)
 
         show_charts = _has_chart_intent(user_query)
+        chart_context = _build_chart_context_from_sensor_result(
+            records=sensor_result.data,
+            analysis=analysis,
+            chart_specs=chart_specs,
+            data_type=analysis_data_type,
+            user_query=user_query,
+            device_codes=device_codes,
+            query_plan=query_plan,
+        )
 
         result = {
             "data": compressed_data,
@@ -1193,6 +1269,7 @@ def fetch_sensor_data_with_components(
             "statistics": sensor_result.statistics,
             "analysis": analysis,
             "chart_specs": chart_specs,
+            "chart_context": chart_context,
             "focused_result": focused_result,
             "focused_table": focused_result.get("table") if isinstance(focused_result, dict) else None,
             "show_charts": show_charts,

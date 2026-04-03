@@ -221,6 +221,110 @@
             flex: 1;
             min-height: 0;
         }
+        .common-question-groups {
+            max-height: 720px;
+            overflow-y: auto;
+            padding-right: 0.1rem;
+        }
+        .common-question-group {
+            border: 1px solid #e5e7eb;
+            border-radius: 0.9rem;
+            background: #f9fafb;
+            overflow: hidden;
+        }
+        .common-question-group + .common-question-group {
+            margin-top: 0.75rem;
+        }
+        .common-question-group summary {
+            list-style: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            padding: 0.85rem 0.95rem;
+            background: #ffffff;
+        }
+        .common-question-group summary::-webkit-details-marker {
+            display: none;
+        }
+        .common-question-group[open] summary {
+            background: #eef2ff;
+        }
+        .common-question-group-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            min-width: 0;
+        }
+        .common-question-group-name {
+            font-size: 0.92rem;
+            font-weight: 600;
+            color: #111827;
+        }
+        .common-question-group-meta {
+            font-size: 0.75rem;
+            color: #6b7280;
+        }
+        .common-question-group-body {
+            padding: 0.75rem;
+            display: grid;
+            gap: 0.55rem;
+        }
+        .common-question-button {
+            width: 100%;
+            text-align: left;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.85rem;
+            background: #ffffff;
+            padding: 0.72rem 0.8rem;
+            transition: all 0.2s ease;
+        }
+        .common-question-button:hover {
+            background: #faf5ff;
+            border-color: #d8b4fe;
+            box-shadow: 0 6px 18px rgba(124, 58, 237, 0.08);
+        }
+        .common-question-button-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.6rem;
+            margin-bottom: 0.28rem;
+        }
+        .common-question-button-label {
+            font-size: 0.84rem;
+            font-weight: 600;
+            color: #374151;
+        }
+        .common-question-level {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 3rem;
+            padding: 0.15rem 0.45rem;
+            border-radius: 9999px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+        .common-question-level.simple {
+            background: #dcfce7;
+            color: #166534;
+        }
+        .common-question-level.medium {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        .common-question-level.complex {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        .common-question-button-text {
+            font-size: 0.76rem;
+            color: #6b7280;
+            line-height: 1.5;
+        }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -266,7 +370,10 @@
                             <h3 class="text-lg font-semibold text-gray-800">🕘 历史对话</h3>
                             <p class="text-xs text-gray-500 mt-1">可切换历史会话，也可新开一轮对话。</p>
                         </div>
-                        <button onclick="startNewConversation()" class="px-3 py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-700 text-sm font-medium">新开对话</button>
+                        <div class="flex items-center gap-2">
+                            <button onclick="clearConversationHistory()" class="px-3 py-2 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 text-sm font-medium">清空历史</button>
+                            <button onclick="startNewConversation()" class="px-3 py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-700 text-sm font-medium">新开对话</button>
+                        </div>
                     </div>
                     <div class="max-h-[calc(100vh-240px)] overflow-y-auto divide-y divide-gray-100" id="conversationList">
                         <div class="p-4 text-sm text-gray-500">加载中...</div>
@@ -311,121 +418,10 @@
                     </div>
                 </div>
 
-                <!-- 数据表格（仅用于快捷查询） -->
-                <div class="bg-white rounded-xl shadow-lg mt-6 overflow-hidden" id="tableSection" style="display: none;">
-                    <div class="p-4 border-b flex justify-between items-center">
-                        <h3 class="text-lg font-semibold text-gray-800">📊 快捷查询结果</h3>
-                        <div class="flex items-center space-x-4">
-                            <span class="text-sm text-gray-600" id="tableInfo"></span>
-                            <button onclick="exportData()" class="text-sm text-purple-600 hover:text-purple-800">导出数据</button>
-                        </div>
-                    </div>
-                    
-                    <!-- 统计信息 -->
-                    <div class="px-4 py-3 bg-gray-50 border-b" id="statsSection" style="display: none;">
-                        <div class="flex space-x-6 text-sm">
-                            <span class="text-gray-600">最小值: <span class="font-semibold text-gray-800" id="statMin">-</span></span>
-                            <span class="text-gray-600">最大值: <span class="font-semibold text-gray-800" id="statMax">-</span></span>
-                            <span class="text-gray-600">平均值: <span class="font-semibold text-gray-800" id="statAvg">-</span></span>
-                        </div>
-                    </div>
-
-                    <!-- 表格 -->
-                    <div class="table-container">
-                        <table class="w-full">
-                            <thead class="bg-gray-50 sticky top-0" id="quickTableHead">
-                                <tr>
-                                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">时间</th>
-                                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">设备</th>
-                                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">标签</th>
-                                    <th class="px-4 py-3 text-right text-sm font-semibold text-gray-600">数值</th>
-                                </tr>
-                            </thead>
-                            <tbody id="tableBody" class="divide-y divide-gray-200">
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <!-- 分页 -->
-                    <div class="p-4 border-t flex justify-between items-center" id="paginationSection">
-                        <div class="text-sm text-gray-600">
-                            第 <span id="currentPage">1</span> / <span id="totalPages">1</span> 页，
-                            共 <span id="totalCount">0</span> 条记录
-                        </div>
-                        <div class="flex space-x-2">
-                            <button onclick="prevPage()" id="prevBtn" 
-                                class="px-4 py-2 border rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
-                                上一页
-                            </button>
-                            <button onclick="nextPage()" id="nextBtn"
-                                class="px-4 py-2 border rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">
-                                下一页
-                            </button>
-                        </div>
-                    </div>
-                </div>
             </div>
 
-            <!-- 右侧：快捷查询 -->
+            <!-- 右侧：工具与题库 -->
             <div class="space-y-6">
-                <!-- 快捷查询面板 -->
-                <div class="bg-white rounded-xl shadow-lg p-4">
-                    <h3 class="text-lg font-semibold text-gray-800 mb-4">⚡ 快捷查询</h3>
-                    
-                    <div class="space-y-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">设备代号</label>
-                            <input type="text" id="deviceCode" value="a1_b9"
-                                class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                        </div>
-                        
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">数据类型</label>
-                            <select id="dataType" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                                <option value="ep">电量 (ep)</option>
-                                <option value="i">电流 (i)</option>
-                                <option value="u_line">电压 (u_line)</option>
-                                <option value="p">功率 (p)</option>
-                                <option value="qf">功率因数 (qf)</option>
-                                <option value="t">温度 (t)</option>
-                                <option value="thd_i">电流谐波 (thd_i)</option>
-                                <option value="thd_v">电压谐波 (thd_v)</option>
-                                <option value="soc">电池容量 (soc)</option>
-                            </select>
-                        </div>
-                        
-                        <div class="grid grid-cols-2 gap-3">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">开始日期</label>
-                                <input type="date" id="startDate" 
-                                    class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                            </div>
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-1">结束日期</label>
-                                <input type="date" id="endDate"
-                                    class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                            </div>
-                        </div>
-                        
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">每页条数</label>
-                            <select id="pageSize" class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500">
-                                <option value="20">20 条</option>
-                                <option value="50" selected>50 条</option>
-                                <option value="100">100 条</option>
-                                <option value="200">200 条</option>
-                            </select>
-                        </div>
-                        
-                        <button onclick="quickQuery()" 
-                            class="w-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white py-3 rounded-lg hover:opacity-90 transition font-medium">
-                            🔍 查询数据
-                        </button>
-                    </div>
-                </div>
-
-                <!-- 执行步骤 -->
-
                 <div class="bg-white rounded-xl shadow-lg p-4 border border-indigo-100">
                     <div class="flex items-start justify-between gap-3">
                         <div>
@@ -450,29 +446,11 @@
 
                 <!-- 快捷问题 -->
                 <div class="bg-white rounded-xl shadow-lg p-4">
-                    <h3 class="text-lg font-semibold text-gray-800 mb-4">💡 常用问题</h3>
-                    <div class="space-y-2">
-                        <button onclick="askQuestion('有哪些项目可用？')" 
-                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-50 text-gray-700 text-sm transition">
-                            有哪些项目可用？
-                        </button>
-                        <button onclick="askQuestion('搜索包含 b9 的设备')" 
-                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-50 text-gray-700 text-sm transition">
-                            搜索包含 b9 的设备
-                        </button>
-                        <button onclick="askQuestion('查询 a1_b9 设备今天的电流数据')" 
-                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-50 text-gray-700 text-sm transition">
-                            查询 a1_b9 今天的电流数据
-                        </button>
-                        <button onclick="askQuestion('查询 a1_b9 设备今天的电压数据')" 
-                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-50 text-gray-700 text-sm transition">
-                            查询 a1_b9 今天的电压数据
-                        </button>
-                        <button onclick="askQuestion('查询 a1_b9 设备 2024年1月的电量数据，每页50条')" 
-                            class="w-full text-left px-3 py-2 rounded-lg hover:bg-purple-50 text-gray-700 text-sm transition">
-                            查询 a1_b9 2024年1月电量数据
-                        </button>
+                    <div class="flex items-center justify-between gap-2 mb-4">
+                        <h3 class="text-lg font-semibold text-gray-800">💡 常用问题</h3>
+                        <span class="text-xs text-gray-400">按分类点击测试</span>
                     </div>
+                    <div id="commonQuestionGroups" class="common-question-groups"></div>
                 </div>
             </div>
         </div>
@@ -507,10 +485,9 @@
         let chatSessionId = null;
         let chatUserId = null;
         let currentQueryParams = null;
-        let currentPage = 1;
-        let tableData = [];
         let chatHistory = [];  // 对话历史
-        let isLoadingTable = false;  // 防止重复请求
+        let conversationSessions = [];
+        let activeConversationSessionId = null;
         let inlineChartInstances = new Map();
         let inlineChartSpecs = new Map();
         let inlineChartResizeObservers = new Map();
@@ -519,8 +496,83 @@
         let fullscreenChart = null;
         let fullscreenChartMeta = null;
         let lastInsightPayload = null;
+        const chartSuggestionState = new Map();
         let executionStepTimers = new Map();
         let chatMessageSequence = 0;
+        const COMMON_QUESTION_GROUPS = [
+            {
+                title: '基础查询',
+                description: '简单 / 时间解析',
+                defaultOpen: true,
+                questions: [
+                    { level: 'simple', label: '今日电量', text: '查询 a1_b9 设备今天的电量数据' },
+                    { level: 'simple', label: '昨日电流', text: '查询 b1_b14 设备昨天的电流数据' },
+                    { level: 'simple', label: '2024年1月电量', text: 'a1_b9 设备 2024年1月的电量' },
+                    { level: 'medium', label: '最近7天趋势', text: 'a1_b9 设备最近7天的用电量趋势' },
+                    { level: 'medium', label: '指定日期范围', text: '查询 a1_b9 在 2024年1月5日到1月10日的电量数据' },
+                ],
+            },
+            {
+                title: '搜索与项目',
+                description: '设备 / 项目检索',
+                defaultOpen: false,
+                questions: [
+                    { level: 'simple', label: '搜索 b9', text: '搜索包含 b9 的设备' },
+                    { level: 'simple', label: '电梯设备', text: '有哪些电梯设备？' },
+                    { level: 'medium', label: '北京电力项目设备', text: '北京电力项目有哪些设备？' },
+                    { level: 'simple', label: '项目列表', text: '有哪些项目可用？' },
+                    { level: 'medium', label: '设备最多项目', text: '哪个项目的设备最多？' },
+                ],
+            },
+            {
+                title: '对比查询',
+                description: '双设备 / 多设备',
+                defaultOpen: true,
+                questions: [
+                    { level: 'medium', label: '双设备用电对比', text: '对比一下 a1_b9 和 b1_b14 的电量数据' },
+                    { level: 'medium', label: '哪个用电更多', text: 'a1_b9 与 b1_b14 哪个用电更多？' },
+                    { level: 'complex', label: '指定月份对比', text: '对比一下 a1_b9 和 b1_b14 在2024年1月的电量数据' },
+                    { level: 'complex', label: '三设备对比', text: '比较 a1_b9、b1_b14、a2_b3 三个设备的用电情况' },
+                    { level: 'complex', label: '重复槽位对比', text: '对比一下 a1_b9 和 a2_b3 和 b1_b14 以及 a2_b3 的电压数据' },
+                ],
+            },
+            {
+                title: '统计聚合',
+                description: '平均值 / 最值 / 聚合',
+                defaultOpen: false,
+                questions: [
+                    { level: 'medium', label: '平均用电量', text: 'a1_b9 设备2024年1月的平均用电量是多少？' },
+                    { level: 'complex', label: '哪天最多', text: 'a1_b9 设备在2024年1月哪天用电最多？' },
+                    { level: 'complex', label: '日均值', text: 'a1_b9 设备2024年1月每天的平均用电量' },
+                    { level: 'complex', label: '每周总和', text: '统计 a1_b9 设备2024年1月每周的总用电量' },
+                    { level: 'complex', label: '多设备日均对比', text: '计算 a1_b9 和 b1_b14 在2024年1月的日均用电量对比' },
+                ],
+            },
+            {
+                title: '趋势与异常',
+                description: '趋势判断 / 条件过滤',
+                defaultOpen: false,
+                questions: [
+                    { level: 'complex', label: '趋势分析', text: '分析 a1_b9 设备2024年1月的用电趋势' },
+                    { level: 'complex', label: '长期趋势', text: '分析 b1_b14 设备最近一个月的电流变化趋势' },
+                    { level: 'complex', label: '异常用电点', text: 'a1_b9 设备2024年1月有没有异常用电的时间点？' },
+                    { level: 'complex', label: '前5高点', text: '找出 a1_b9 设备2024年1月用电量最高的前5个时间点' },
+                    { level: 'complex', label: '阈值过滤', text: '找出 a1_b9 今天电流超过20A的所有时间点' },
+                ],
+            },
+            {
+                title: '图表测试',
+                description: '续问画图 / 切图',
+                defaultOpen: true,
+                questions: [
+                    { level: 'medium', label: '今日电流后画图', text: '查询 a1_b9 设备今天的电流数据，然后帮我画图' },
+                    { level: 'medium', label: '今日电压热力图', text: '查询 a1_b9 设备今天的电压数据，画热力图' },
+                    { level: 'medium', label: '三设备对比后画图', text: '比较 a1_b9、b1_b14、a2_b3 三个设备的用电情况，并画趋势对比图' },
+                    { level: 'complex', label: '异常散点图', text: '查询 a1_b9 今天的电流数据，帮我画异常散点图' },
+                    { level: 'complex', label: '箱线分布图', text: '对比 a1_b9 和 b1_b14 的电流波动，画箱线图' },
+                ],
+            },
+        ];
 
         // 初始化日期
         function generateChatSessionId() {
@@ -557,6 +609,64 @@
             const safeVersion = String(version || '').trim() || '-';
             el.textContent = `v${safeVersion}`;
             el.title = releaseName ? `${safeVersion} · ${releaseName}` : safeVersion;
+        }
+
+        function getQuestionLevelClass(level) {
+            const normalized = String(level || '').trim().toLowerCase();
+            if (normalized === 'simple') return 'simple';
+            if (normalized === 'complex') return 'complex';
+            return 'medium';
+        }
+
+        function getQuestionLevelLabel(level) {
+            const normalized = String(level || '').trim().toLowerCase();
+            if (normalized === 'simple') return '简单';
+            if (normalized === 'complex') return '复杂';
+            return '中等';
+        }
+
+        function renderCommonQuestionGroups() {
+            const host = document.getElementById('commonQuestionGroups');
+            if (!host) return;
+            host.innerHTML = '';
+
+            COMMON_QUESTION_GROUPS.forEach((group) => {
+                const details = document.createElement('details');
+                details.className = 'common-question-group';
+                if (group.defaultOpen) {
+                    details.open = true;
+                }
+
+                const summary = document.createElement('summary');
+                summary.innerHTML = `
+                    <div class="common-question-group-title">
+                        <span class="common-question-group-name">${escapeHtml(group.title || '')}</span>
+                    </div>
+                    <span class="common-question-group-meta">${escapeHtml(group.description || '')}</span>
+                `;
+                details.appendChild(summary);
+
+                const body = document.createElement('div');
+                body.className = 'common-question-group-body';
+
+                (group.questions || []).forEach((item) => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'common-question-button';
+                    button.innerHTML = `
+                        <div class="common-question-button-head">
+                            <span class="common-question-button-label">${escapeHtml(item.label || item.text || '')}</span>
+                            <span class="common-question-level ${getQuestionLevelClass(item.level)}">${getQuestionLevelLabel(item.level)}</span>
+                        </div>
+                        <div class="common-question-button-text">${escapeHtml(item.text || '')}</div>
+                    `;
+                    button.addEventListener('click', () => askQuestion(item.text || ''));
+                    body.appendChild(button);
+                });
+
+                details.appendChild(body);
+                host.appendChild(details);
+            });
         }
 
         function rememberChatSessionId(sessionId) {
@@ -731,6 +841,7 @@
                             ...meta.table_preview,
                             analysis: meta.analysis || meta.table_preview.analysis,
                             chart_specs: Array.isArray(meta.chart_specs) ? meta.chart_specs : meta.table_preview.chart_specs,
+                            chart_context: meta.chart_context || meta.table_preview.chart_context || null,
                             show_charts: typeof meta.show_charts === 'boolean' ? meta.show_charts : meta.table_preview.show_charts,
                         }
                         : null;
@@ -788,6 +899,7 @@
                 analysis: insightSource.analysis,
                 chartSpecs: insightSource.chart_specs,
                 showCharts: insightSource.show_charts,
+                chartContext: insightSource.chart_context || meta.chart_context || null,
             };
             return { tableData: replayTableData, insightData, responseMeta: meta };
         }
@@ -804,8 +916,6 @@
                 chatHistory = items.map((item) => ({ role: item.role, content: item.message, meta: item.message_meta || null }));
                 currentQueryParams = null;
                 lastInsightPayload = null;
-                const tableSection = document.getElementById('tableSection');
-                if (tableSection) tableSection.style.display = 'none';
                 const container = document.getElementById('chatContainer');
                 if (!container) return;
                 container.innerHTML = '';
@@ -839,8 +949,6 @@
             chatHistory = [];
             currentQueryParams = null;
             lastInsightPayload = null;
-            const tableSection = document.getElementById('tableSection');
-            if (tableSection) tableSection.style.display = 'none';
             const nextSessionId = generateChatSessionId();
             rememberChatSessionId(nextSessionId);
             setActiveConversation(nextSessionId);
@@ -848,6 +956,35 @@
             renderWelcomeMessage();
             const input = document.getElementById('chatInput');
             if (input) input.focus();
+        }
+
+        async function clearConversationHistory() {
+            if (!window.confirm('确认清空当前用户的全部历史对话吗？此操作不会删除常用叫法记忆。')) {
+                return;
+            }
+            try {
+                const response = await fetch(`${API_BASE}/api/chat/history?user_id=${encodeURIComponent(getChatUserId())}`, {
+                    method: 'DELETE',
+                });
+                const data = await response.json();
+                if (!response.ok || data.success === false) {
+                    throw new Error(data.error || '清空历史失败');
+                }
+                chatHistory = [];
+                conversationSessions = [];
+                currentQueryParams = null;
+                lastInsightPayload = null;
+                chartSuggestionState.clear();
+                const nextSessionId = generateChatSessionId();
+                rememberChatSessionId(nextSessionId);
+                setActiveConversation(nextSessionId);
+                renderConversationList();
+                renderWelcomeMessage();
+                alert(`已清空历史对话，共删除 ${Number(data.deleted_count || 0)} 条记录。`);
+            } catch (error) {
+                console.error('clear conversation history failed', error);
+                alert(error.message || '清空历史失败');
+            }
         }
 
         async function initializeConversationState() {
@@ -865,9 +1002,7 @@
         }
 
         document.addEventListener('DOMContentLoaded', async function() {
-            const today = new Date().toISOString().split('T')[0];
-            document.getElementById('startDate').value = today;
-            document.getElementById('endDate').value = today;
+            renderCommonQuestionGroups();
             getChatSessionId();
             getChatUserId();
             await loadVersionBadge();
@@ -880,10 +1015,19 @@
             if (!normalized) return false;
             const keywords = [
                 '\u56fe', '\u56fe\u8868', '\u753b\u56fe', '\u753b\u51fa\u6765', '\u53ef\u89c6\u5316', '\u6298\u7ebf', '\u67f1\u72b6',
-                '\u96f7\u8fbe', '\u7bb1\u7ebf', '\u70ed\u529b', '\u66f2\u7ebf', '\u8d8b\u52bf\u56fe', '\u5bf9\u6bd4\u56fe',
+                '\u6563\u70b9', '\u96f7\u8fbe', '\u7bb1\u7ebf', '\u70ed\u529b', '\u66f2\u7ebf', '\u8d8b\u52bf\u56fe', '\u5bf9\u6bd4\u56fe',
                 'chart', 'plot', 'echart', 'echarts', 'matplotlib'
             ];
             return keywords.some(keyword => normalized.includes(keyword));
+        }
+
+        function isAffirmativeChartFollowUp(text) {
+            const normalized = String(text || '').toLowerCase().replace(/\s+/g, '').trim();
+            if (!normalized) return false;
+            return [
+                '\u53ef\u4ee5', '\u53ef\u4ee5\u7684', '\u597d', '\u597d\u7684', '\u884c', '\u884c\u7684',
+                '\u597d\u554a', '\u884c\u554a', '\u6765\u5427', '\u6765\u4e00\u4e2a', '\u6765\u4e2a\u56fe', '\u753b\u5427'
+            ].includes(normalized);
         }
 
         function getSemanticMappingAdminUrl() {
@@ -919,51 +1063,88 @@
             const hasAnalysis = !!payload.analysis;
             const hasCharts = Array.isArray(payload.chart_specs) && payload.chart_specs.length > 0;
             const hasQueryParams = !!payload.query_params;
-            if (!hasAnalysis && !hasCharts && !hasQueryParams) return;
+            const hasChartContext = !!payload.chart_context;
+            if (!hasAnalysis && !hasCharts && !hasQueryParams && !hasChartContext) return;
             lastInsightPayload = {
                 ...(lastInsightPayload || {}),
                 ...payload,
                 chart_specs: Array.isArray(payload.chart_specs) ? payload.chart_specs : ((lastInsightPayload && lastInsightPayload.chart_specs) || []),
                 analysis: payload.analysis || (lastInsightPayload && lastInsightPayload.analysis) || null,
-                query_params: payload.query_params || (lastInsightPayload && lastInsightPayload.query_params) || null
+                query_params: payload.query_params || (lastInsightPayload && lastInsightPayload.query_params) || null,
+                chart_context: payload.chart_context || (lastInsightPayload && lastInsightPayload.chart_context) || null,
+                original_question: payload.original_question || (lastInsightPayload && lastInsightPayload.original_question) || null,
             };
         }
 
-        function selectChartSpecsForMessage(message, chartSpecs) {
-            const normalized = (message || '').toLowerCase();
-            if (!Array.isArray(chartSpecs)) return [];
-            const byId = keyword => chartSpecs.filter(spec => (spec.id || '').toLowerCase().includes(keyword));
-            if (normalized.includes('\u96f7\u8fbe')) return byId('radar');
-            if (normalized.includes('\u7bb1\u7ebf')) return byId('box');
-            if (normalized.includes('\u67f1\u72b6')) return byId('bar');
-            if (normalized.includes('\u6298\u7ebf') || normalized.includes('matplotlib') || normalized.includes('plot') || normalized.includes('\u8d8b\u52bf')) {
-                const lineCharts = byId('line');
-                return lineCharts.length ? lineCharts : chartSpecs;
-            }
-            return chartSpecs;
+        function getChartTypeLabel(chartType) {
+            const map = {
+                line: '折线图',
+                bar: '柱状图',
+                scatter: '散点图',
+                boxplot: '箱线图',
+                heatmap: '热力图',
+            };
+            return map[String(chartType || '').toLowerCase()] || '图表';
         }
 
-        function tryHandleChartFollowUp(message) {
-            if (!hasExplicitChartIntent(message)) return false;
-            if (!lastInsightPayload || !Array.isArray(lastInsightPayload.chart_specs) || lastInsightPayload.chart_specs.length === 0) {
-                return false;
+        function buildChartSuggestionPrompt(chartType, chartContext = null) {
+            const normalizedType = String(chartType || '').toLowerCase();
+            const queryKind = String(chartContext?.query_kind || '').toLowerCase();
+            if (normalizedType === 'line') {
+                return queryKind === 'comparison_series' ? '帮我画趋势对比图' : '帮我画趋势图';
             }
+            if (normalizedType === 'bar') {
+                return queryKind === 'comparison_series' ? '帮我画柱状对比图' : '帮我画柱状图';
+            }
+            if (normalizedType === 'scatter') return '帮我画异常散点图';
+            if (normalizedType === 'boxplot') return '帮我画箱线图';
+            if (normalizedType === 'heatmap') return '帮我画热力图';
+            return '帮我画图';
+        }
 
-            const selectedCharts = selectChartSpecsForMessage(message, lastInsightPayload.chart_specs);
-            if (!selectedCharts.length) return false;
-
-            const mentionsMatplotlib = (message || '').toLowerCase().includes('matplotlib');
-            const responseText = mentionsMatplotlib
-                ? '\u5df2\u6839\u636e\u4e0a\u4e00\u8f6e\u67e5\u8be2\u7ed3\u679c\u4e3a\u4f60\u7ed8\u5236\u56fe\u8868\u3002\u5f53\u524d\u524d\u7aef\u4f7f\u7528 ECharts \u5c55\u793a\uff0c\u4fbf\u4e8e\u76f4\u63a5\u4ea4\u4e92\u67e5\u770b\uff1b\u5982\u679c\u4f60\u8fd8\u9700\u8981 Python matplotlib \u811a\u672c\uff0c\u6211\u4e5f\u53ef\u4ee5\u7ee7\u7eed\u751f\u6210\u3002'
-                : '\u5df2\u6839\u636e\u4e0a\u4e00\u8f6e\u67e5\u8be2\u7ed3\u679c\u4e3a\u4f60\u5c55\u793a\u56fe\u8868\uff0c\u8bf7\u770b\u4e0b\u65b9\u56fe\u8868\u533a\u57df\u3002';
-
-            addMessage(responseText, 'ai', null, {
-                analysis: lastInsightPayload.analysis,
-                chartSpecs: selectedCharts,
-                showCharts: true
+        function submitChartSuggestion(messageId, chartType, label) {
+            const suggestionState = chartSuggestionState.get(messageId) || {};
+            const prompt = buildChartSuggestionPrompt(chartType, suggestionState.chartContext || lastInsightPayload?.chart_context || null);
+            const chartFollowUpBaseQuery = String(
+                suggestionState.baseQuery
+                || lastInsightPayload?.query_params?.user_query
+                || lastInsightPayload?.original_question
+                || ''
+            ).trim() || null;
+            sendMessage(prompt, {
+                displayMessage: label ? `点击快捷按钮：${label}` : prompt,
+                skipChartFollowUp: true,
+                chartFollowUpBaseQuery,
             });
-            chatHistory.push({ role: 'assistant', content: responseText });
-            return true;
+        }
+
+        function buildChartSuggestionButtonsHtml(messageId, chartContext, baseQuery = null) {
+            if (!chartContext || chartContext.chartable === false || chartContext.supports_follow_up_chart === false) {
+                return '';
+            }
+            const suggestions = Array.isArray(chartContext.follow_up_suggestions) ? chartContext.follow_up_suggestions : [];
+            if (!suggestions.length) return '';
+            chartSuggestionState.set(messageId, {
+                chartContext: chartContext || null,
+                baseQuery: String(baseQuery || '').trim() || null,
+            });
+            return `
+                <div class="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4">
+                    <div class="flex items-center justify-between gap-3 flex-wrap">
+                        <div>
+                            <div class="text-sm font-semibold text-gray-800">继续画图</div>
+                            <div class="mt-1 text-xs text-gray-500">基于上一轮结果直接切图，无需重新查询数据库</div>
+                        </div>
+                    </div>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        ${suggestions.map(item => {
+                            const chartType = String(item.chart_type || '').trim();
+                            const label = String(item.label || getChartTypeLabel(chartType)).trim();
+                            return `<button onclick="submitChartSuggestion('${messageId}', '${escapeHtml(chartType)}', '${escapeHtml(label)}')" class="inline-flex items-center rounded-full border border-indigo-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50">${escapeHtml(label)}</button>`;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
         }
 
         async function sendMessage(messageOverride = null, options = {}) {
@@ -979,10 +1160,6 @@
 
             if (typeof messageOverride !== 'string') {
                 input.value = '';
-            }
-
-            if (!options.skipChartFollowUp && tryHandleChartFollowUp(message)) {
-                return;
             }
 
             const loadingId = addStreamingMessage();
@@ -1004,6 +1181,7 @@
                         session_id: getChatSessionId(),
                         user_id: getChatUserId(),
                         alias_confirmation: options.aliasConfirmation || null,
+                        chart_follow_up_base_query: options.chartFollowUpBaseQuery || null,
                     })
                 });
 
@@ -1121,6 +1299,9 @@
                                     ...finalResponse.table_preview,
                                     analysis: finalResponse.analysis || finalResponse.table_preview.analysis,
                                     chart_specs: Array.isArray(finalResponse.chart_specs) ? finalResponse.chart_specs : finalResponse.table_preview.chart_specs,
+                                    chart_context: finalResponse.chart_context || finalResponse.table_preview.chart_context || null,
+                                    query_params: finalResponse.query_params || finalResponse.table_preview.query_params || null,
+                                    original_question: finalResponse.original_question || null,
                                     show_charts: typeof finalResponse.show_charts === 'boolean' ? finalResponse.show_charts : finalResponse.table_preview.show_charts,
                                 }
                                 : null;
@@ -1146,6 +1327,9 @@
                                             ...queryData,
                                             analysis: finalResponse.analysis || queryData.analysis,
                                             chart_specs: Array.isArray(finalResponse.chart_specs) ? finalResponse.chart_specs : queryData.chart_specs,
+                                            chart_context: finalResponse.chart_context || queryData.chart_context || null,
+                                            query_params: finalResponse.query_params || queryData.query_params || null,
+                                            original_question: finalResponse.original_question || null,
                                             show_charts: typeof finalResponse.show_charts === 'boolean' ? finalResponse.show_charts : queryData.show_charts,
                                         };
                                         tableData = buildSensorTableData(queryData, sensorQueryResult.analysis, finalResponse.query_params);
@@ -1208,7 +1392,8 @@
                     finalizeStreamingMessage(loadingId, finalAnswerText, tableData, {
                         analysis: insightPayload.analysis,
                         chartSpecs: insightPayload.chart_specs,
-                        showCharts: insightPayload.show_charts
+                        showCharts: insightPayload.show_charts,
+                        chartContext: insightPayload.chart_context || null,
                     }, {
                         ...finalResponse,
                         original_question: message,
@@ -1638,13 +1823,22 @@ function askQuestion(question) {
             return detailTable;
         }
 
-        function buildInlineInsightHtml(messageId, insightData) {
+        function buildInlineInsightHtml(messageId, insightData, responseMeta = null) {
             if (!insightData) return '';
 
             const analysis = insightData.analysis;
+            const chartContext = insightData.chartContext || null;
             const chartSpecs = insightData.showCharts ? (insightData.chartSpecs || []) : [];
+            const baseQuery = String(
+                responseMeta?.query_params?.user_query
+                || responseMeta?.original_question
+                || insightData?.query_params?.user_query
+                || insightData?.original_question
+                || ''
+            ).trim() || null;
             let analysisHtml = '';
             let chartsHtml = '';
+            const suggestionHtml = buildChartSuggestionButtonsHtml(messageId, chartContext, baseQuery);
 
             if (analysis && (analysis.headline || (analysis.summary_cards || []).length || (analysis.insights || []).length)) {
                 const analysisScopeLabel = String(analysis.analysis_scope_label || '').trim();
@@ -1671,8 +1865,11 @@ function askQuestion(question) {
                                 ${(analysis.insights || []).map(item => `<li>${escapeHtml(item)}</li>`).join('')}
                             </ul>
                         ` : ''}
+                        ${suggestionHtml}
                     </div>
                 `;
+            } else if (suggestionHtml) {
+                analysisHtml = suggestionHtml;
             }
 
             if (Array.isArray(chartSpecs) && chartSpecs.length > 0) {
@@ -1689,7 +1886,10 @@ function askQuestion(question) {
                                 return `
                                     <div class="rounded-2xl border border-gray-200 bg-white p-3">
                                         <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
-                                            <div class="text-sm font-medium text-gray-700">${escapeHtml(spec.title || `\u56fe\u8868 ${index + 1}`)}</div>
+                                            <div>
+                                                <div class="text-sm font-medium text-gray-700">${escapeHtml(spec.title || `\u56fe\u8868 ${index + 1}`)}</div>
+                                                ${spec.reason ? `<div class="mt-1 text-xs text-gray-500">${escapeHtml(spec.reason)}</div>` : ''}
+                                            </div>
                                             <div class="flex items-center gap-2 text-xs flex-wrap">
                                                 <button onclick="adjustInlineChartHeight('${chartId}', -80)" class="px-2 py-1 border rounded-lg hover:bg-gray-50">\u7f29\u5c0f</button>
                                                 <button onclick="adjustInlineChartHeight('${chartId}', 80)" class="px-2 py-1 border rounded-lg hover:bg-gray-50">\u653e\u5927</button>
@@ -2740,7 +2940,7 @@ function askQuestion(question) {
             const resolvedScopeHtml = buildResolvedScopeHtml(messageId, responseMeta);
             const memoryActionHtml = buildMemoryActionHtml(messageId, responseMeta);
             const memorySuggestionHtml = buildMemorySuggestionHtml(messageId, responseMeta);
-            const inlineInsightHtml = buildInlineInsightHtml(messageId, insightData);
+            const inlineInsightHtml = buildInlineInsightHtml(messageId, insightData, responseMeta);
             const executionSteps = Array.isArray(responseMeta?.executionSteps) ? responseMeta.executionSteps : [];
             const executionHtml = executionSteps.length ? `<div id="${messageId}-execution-host"></div>` : '';
             const hasWideContent = Boolean(clarificationHtml || resolvedScopeHtml || memoryActionHtml || memorySuggestionHtml || inlineInsightHtml);
@@ -2982,195 +3182,6 @@ function chatTablePrev(tableId) {
                 closeChartModal();
             }
         });
-
-        async function quickQuery() {
-            const deviceCode = document.getElementById('deviceCode').value.trim();
-            const dataType = document.getElementById('dataType').value;
-            const startDate = document.getElementById('startDate').value;
-            const endDate = document.getElementById('endDate').value;
-            const pageSize = parseInt(document.getElementById('pageSize').value);
-
-            if (!deviceCode || !startDate || !endDate) {
-                alert('请填写完整的查询条件');
-                return;
-            }
-
-            currentQueryParams = {
-                device_codes: [deviceCode],
-                start_time: startDate,
-                end_time: endDate,
-                data_type: dataType,
-                page_size: pageSize
-            };
-            currentPage = 1;
-
-            await loadTableData();
-        }
-
-        // 加载表格数据
-        async function loadTableData() {
-            if (!currentQueryParams) return;
-            
-            // 防止重复请求
-            if (isLoadingTable) {
-                console.log('⚠️ 正在加载中，跳过重复请求');
-                return;
-            }
-            
-            isLoadingTable = true;
-            console.log(`📊 开始加载第 ${currentPage} 页数据...`);
-
-            const section = document.getElementById('tableSection');
-            section.style.display = 'block';
-            
-            // 恢复传感器数据表头
-            const thead = document.querySelector('#quickTableHead tr');
-            if (thead) {
-                thead.innerHTML = `
-                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">时间</th>
-                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">设备</th>
-                    <th class="px-4 py-3 text-left text-sm font-semibold text-gray-600">标签</th>
-                    <th class="px-4 py-3 text-right text-sm font-semibold text-gray-600">数值</th>
-                `;
-            }
-            document.getElementById('paginationSection').style.display = 'flex';
-            
-            // 禁用分页按钮
-            document.getElementById('prevBtn').disabled = true;
-            document.getElementById('nextBtn').disabled = true;
-
-            try {
-                const response = await fetch(API_BASE + '/api/query', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        ...currentQueryParams,
-                        page: currentPage
-                    })
-                });
-                const data = await response.json();
-
-                if (data.success) {
-                    tableData = data.data || [];
-                    console.log(`✅ 第 ${currentPage} 页加载成功，${tableData.length} 条记录`);
-                    if (tableData.length > 0) {
-                        console.log(`   第一条: ${tableData[0].time} - ${tableData[0].value}`);
-                        console.log(`   最后一条: ${tableData[tableData.length-1].time} - ${tableData[tableData.length-1].value}`);
-                    }
-                    renderTable(tableData);
-                    updatePagination(data);
-                    updateStats(data.statistics);
-                } else {
-                    alert('查询失败：' + (data.error || '未知错误'));
-                }
-            } catch (error) {
-                console.error('❌ 加载失败:', error);
-                alert('网络错误');
-            } finally {
-                isLoadingTable = false;
-            }
-        }
-
-        // 渲染表格
-        function renderTable(data) {
-            const tbody = document.getElementById('tableBody');
-            
-            // 清空旧数据（防止重复）
-            tbody.innerHTML = '';
-            
-            if (data.length === 0) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="4" class="px-4 py-8 text-center text-gray-500">暂无数据</td>
-                    </tr>
-                `;
-                return;
-            }
-
-            tbody.innerHTML = data.map(row => {
-                const device = row.device && row.device !== '-' ? escapeHtml(row.device) : '<span class="text-gray-400">-</span>';
-                const tag = row.tag && row.tag !== '-' ? `<span class="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">${escapeHtml(row.tag)}</span>` : '<span class="text-gray-400">-</span>';
-                
-                return `
-                    <tr class="hover:bg-gray-50">
-                        <td class="px-4 py-3 text-sm text-gray-800">${escapeHtml(row.time || '-')}</td>
-                        <td class="px-4 py-3 text-sm text-gray-600">${device}</td>
-                        <td class="px-4 py-3 text-sm">${tag}</td>
-                        <td class="px-4 py-3 text-sm text-right font-mono text-gray-800">${row.value !== undefined && row.value !== '' ? row.value : '-'}</td>
-                    </tr>
-                `;
-            }).join('');
-        }
-
-        // 更新分页
-        function updatePagination(data) {
-            document.getElementById('currentPage').textContent = data.page || 1;
-            document.getElementById('totalPages').textContent = data.total_pages || 1;
-            document.getElementById('totalCount').textContent = data.total_count || 0;
-            
-            document.getElementById('prevBtn').disabled = (data.page || 1) <= 1;
-            document.getElementById('nextBtn').disabled = !data.has_more;
-            
-            document.getElementById('tableInfo').textContent = 
-                data.is_sampled ? '(数据已降采样)' : '';
-        }
-
-        // 更新统计
-        function updateStats(stats) {
-            const section = document.getElementById('statsSection');
-            if (stats) {
-                section.style.display = 'block';
-                document.getElementById('statMin').textContent = stats.min?.toFixed(2) || '-';
-                document.getElementById('statMax').textContent = stats.max?.toFixed(2) || '-';
-                document.getElementById('statAvg').textContent = stats.avg?.toFixed(2) || '-';
-            } else {
-                section.style.display = 'none';
-            }
-        }
-
-        // 上一页
-        function prevPage() {
-            if (currentPage > 1 && !isLoadingTable) {
-                currentPage--;
-                console.log(`⬅️ 翻到上一页: ${currentPage}`);
-                loadTableData();
-            }
-        }
-
-        // 下一页
-        function nextPage() {
-            if (!isLoadingTable) {
-                currentPage++;
-                console.log(`➡️ 翻到下一页: ${currentPage}`);
-                loadTableData();
-            }
-        }
-
-        // 导出数据
-        function exportData() {
-            if (tableData.length === 0) {
-                alert('没有数据可导出');
-                return;
-            }
-
-            const csv = [
-                ['时间', '设备', '标签', '数值'].join(','),
-                ...tableData.map(row => [
-                    row.time || '',
-                    row.device || '',
-                    row.tag || '',
-                    row.value || ''
-                ].join(','))
-            ].join('\n');
-
-            const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `data_export_${new Date().toISOString().slice(0,10)}.csv`;
-            a.click();
-            URL.revokeObjectURL(url);
-        }
 
         // HTML 转义
         function escapeHtml(text) {

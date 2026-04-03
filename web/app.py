@@ -27,15 +27,12 @@ from src.metadata.metadata_engine import MetadataEngine
 from src.fetcher.data_fetcher import DataFetcher
 from src.analysis import InsightEngine
 from src.compressor.context_compressor import ContextCompressor
-from src.agent import DAGOrchestrator
-from src.agent.orchestrator import create_agent_with_streaming
 from src.agent.query_entities import allows_explicit_multi_scope_aggregation
 from src.entity_resolver import ChromaEntityResolver
 from src.tools.sensor_tool import fetch_sensor_data_with_components
 from src.router.collection_router import get_collection_prefix, get_target_collections, get_data_tags
 from pymongo import MongoClient
 import httpx
-from langchain_openai import ChatOpenAI
 from src.semantic_rules import SemanticRuleStore
 from src.user_memory_store import UserMemoryStore
 from src.chat_memory_service import ChatMemoryService
@@ -43,6 +40,7 @@ from src.memory_rewrite import parse_memory_rewrite_json
 from src.version_info import APP_VERSION, build_version_payload
 
 logger = logging.getLogger(__name__)
+_LLM_CLIENT = None
 
 CHAT_HISTORY_LIMIT = 10
 SESSION_ALIAS_LIMIT = 50
@@ -59,6 +57,47 @@ ANSWER_STREAM_CHUNK_SIZE = max(6, int(os.getenv("ANSWER_STREAM_CHUNK_SIZE", "12"
 ANSWER_STREAM_CHUNK_DELAY_MS = max(0, int(os.getenv("ANSWER_STREAM_CHUNK_DELAY_MS", "16")))
 ANSWER_STREAM_PUNCTUATION = set("\uFF0C\u3002\uFF1F\uFF01\uFF1B\uFF1A,.!?;:\n")
 RESOLVED_SCOPE_CARD_ITEM_LIMIT = max(1, int(os.getenv("RESOLVED_SCOPE_CARD_ITEM_LIMIT", "20")))
+SESSION_SENSOR_RESULT_CACHE_LIMIT = max(50, int(os.getenv("SESSION_SENSOR_RESULT_CACHE_LIMIT", "5000")))
+CHART_FOLLOW_UP_KEYWORDS = (
+    "图",
+    "图表",
+    "画图",
+    "画一下",
+    "画一张图",
+    "画张图",
+    "帮我画",
+    "可视化",
+    "趋势图",
+    "对比图",
+    "折线图",
+    "柱状图",
+    "散点图",
+    "雷达图",
+    "箱线图",
+    "热力图",
+    "曲线图",
+    "chart",
+    "plot",
+    "echart",
+    "echarts",
+    "matplotlib",
+)
+CHART_FOLLOW_UP_AFFIRMATIVES = {
+    "可以",
+    "可以的",
+    "好",
+    "好的",
+    "好的",
+    "行",
+    "行的",
+    "好啊",
+    "行啊",
+    "来吧",
+    "来一个",
+    "来一张",
+    "来个图",
+    "画吧",
+}
 
 
 def _iter_answer_delta_chunks(text: str, chunk_size: int = ANSWER_STREAM_CHUNK_SIZE):
@@ -106,11 +145,20 @@ def _normalize_alias_key(alias: str) -> str:
 def _get_session_state(session_id: str) -> Dict[str, Any]:
     state = SESSION_STATE.setdefault(
         session_id,
-        {"device_aliases": {}, "updated_at": None, "last_user_query": None, "confirmed_project": None},
+        {
+            "device_aliases": {},
+            "updated_at": None,
+            "last_user_query": None,
+            "confirmed_project": None,
+            "last_sensor_query_context": None,
+            "last_sensor_result_cache": None,
+        },
     )
     state.setdefault("device_aliases", {})
     state.setdefault("last_user_query", None)
     state.setdefault("confirmed_project", None)
+    state.setdefault("last_sensor_query_context", None)
+    state.setdefault("last_sensor_result_cache", None)
     state["updated_at"] = datetime.now().isoformat()
     return state
 
@@ -133,7 +181,595 @@ def _clear_session_scope(session_id: str) -> int:
     count = len(alias_map)
     alias_map.clear()
     state["confirmed_project"] = None
+    state["last_sensor_query_context"] = None
+    state["last_sensor_result_cache"] = None
     return count
+
+
+def _build_device_name_map_from_scope(resolved_scope: Optional[dict]) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for item in (resolved_scope or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        device_code = str(item.get("device") or "").strip()
+        device_name = str(item.get("name") or "").strip()
+        if device_code and device_name:
+            mapping[device_code] = device_name
+    return mapping
+
+
+def _coerce_chart_cache_raw_data(raw_data: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw_data, list):
+        return [item for item in raw_data if isinstance(item, dict)]
+    if isinstance(raw_data, str):
+        try:
+            payload = json.loads(raw_data)
+            if isinstance(payload, list):
+                return [item for item in payload if isinstance(item, dict)]
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def _coerce_normalized_chart_cache_records(records: Any) -> List[Dict[str, Any]]:
+    if isinstance(records, list):
+        return [item for item in records if isinstance(item, dict)]
+    return []
+
+
+def _json_safe_copy(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        return value
+
+
+def _extract_comparison_targets_from_query_params(query_params: Optional[dict]) -> List[str]:
+    if not isinstance(query_params, dict):
+        return []
+
+    query_plan = query_params.get("query_plan") if isinstance(query_params.get("query_plan"), dict) else {}
+    for key in ("comparison_targets", "search_targets"):
+        raw_values = query_plan.get(key)
+        if isinstance(raw_values, list):
+            normalized = [str(item).strip() for item in raw_values if str(item or "").strip()]
+            if key == "comparison_targets" and normalized:
+                return normalized
+            if key == "search_targets" and len(normalized) > 1:
+                return normalized
+
+    device_codes = query_params.get("device_codes")
+    if isinstance(device_codes, list):
+        normalized = [str(item).strip() for item in device_codes if str(item or "").strip()]
+        if len(normalized) > 1:
+            return normalized
+    return []
+
+
+def _build_chart_context_comparison_slots(
+    query_params: Optional[dict],
+    resolved_scope: Optional[dict],
+) -> List[Dict[str, Any]]:
+    if not isinstance(query_params, dict):
+        return []
+
+    comparison_targets = _extract_comparison_targets_from_query_params(query_params)
+    if not comparison_targets:
+        return []
+
+    comparison_scope_groups = query_params.get("comparison_scope_groups") if isinstance(query_params.get("comparison_scope_groups"), dict) else {}
+    device_names = _build_device_name_map_from_scope(resolved_scope)
+    return InsightEngine.build_comparison_slots(
+        comparison_targets=comparison_targets,
+        comparison_scope_groups=comparison_scope_groups,
+        device_names=device_names,
+    )
+
+
+def _build_chart_context_payload(
+    *,
+    session_id: str,
+    query_params: Optional[dict],
+    resolved_scope: Optional[dict],
+    normalized_records: Optional[List[Dict[str, Any]]],
+    analysis: Optional[dict],
+    chart_specs: Optional[List[dict]],
+    user_query: str,
+    cache_key: Optional[str] = None,
+    cache_hit: bool = False,
+) -> Optional[dict]:
+    normalized = _coerce_normalized_chart_cache_records(normalized_records)
+    if not normalized or not isinstance(analysis, dict):
+        return None
+
+    comparison_slots = _build_chart_context_comparison_slots(query_params, resolved_scope)
+    chart_context = InsightEngine.build_chart_context(
+        normalized_records=normalized,
+        analysis=analysis,
+        chart_specs=chart_specs,
+        user_query=user_query,
+        comparison_slots=comparison_slots,
+    )
+    if not isinstance(chart_context, dict):
+        return None
+
+    effective_cache_key = str(cache_key or "").strip() or f"session:{session_id}:{datetime.now().isoformat()}"
+    chart_context["cache_key"] = effective_cache_key
+    chart_context["cache_hit"] = bool(cache_hit)
+    return chart_context
+
+
+def _coerce_chart_context_payload(chart_context: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(chart_context, dict):
+        return None
+    payload = dict(chart_context)
+    slots = payload.get("comparison_slots")
+    payload["comparison_slots"] = [dict(item) for item in slots if isinstance(item, dict)] if isinstance(slots, list) else []
+    suggestions = payload.get("follow_up_suggestions")
+    payload["follow_up_suggestions"] = [dict(item) for item in suggestions if isinstance(item, dict)] if isinstance(suggestions, list) else []
+    if payload.get("anomaly_summary") is not None and not isinstance(payload.get("anomaly_summary"), dict):
+        payload["anomaly_summary"] = None
+    return payload
+
+
+def _store_session_sensor_result_cache(
+    session_id: str,
+    *,
+    base_query: str,
+    query_params: Optional[dict],
+    resolved_scope: Optional[dict],
+    analysis: Optional[dict],
+    table_type: str,
+    chart_specs: Optional[List[dict]],
+    statistics: Optional[dict],
+    raw_data: Any,
+    normalized_records: Optional[List[dict]] = None,
+    chart_context: Optional[dict] = None,
+) -> None:
+    if not session_id or not isinstance(query_params, dict) or not query_params.get("device_codes"):
+        return
+    records = _coerce_chart_cache_raw_data(raw_data)
+    if not records:
+        return
+    if len(records) > SESSION_SENSOR_RESULT_CACHE_LIMIT:
+        records = records[:SESSION_SENSOR_RESULT_CACHE_LIMIT]
+    state = _get_session_state(session_id)
+    state["last_sensor_result_cache"] = {
+        "base_query": str(base_query or "").strip(),
+        "query_params": dict(query_params),
+        "resolved_scope": resolved_scope if isinstance(resolved_scope, dict) else None,
+        "analysis": analysis if isinstance(analysis, dict) else None,
+        "table_type": str(table_type or "").strip(),
+        "chart_specs": list(chart_specs or []),
+        "statistics": statistics if isinstance(statistics, dict) else None,
+        "raw_data": records,
+        "normalized_records": _coerce_normalized_chart_cache_records(normalized_records),
+        "device_names": _build_device_name_map_from_scope(resolved_scope),
+        "chart_context": _coerce_chart_context_payload(chart_context),
+        "updated_at": datetime.now().isoformat(),
+    }
+
+
+def _normalize_chart_cache_base_query(text: str) -> str:
+    compact = re.sub(r"\s+", "", str(text or "")).strip().lower()
+    return compact.translate(str.maketrans("", "", "，。！？、；：,.!?;:（）()【】[]\"'“”‘’"))
+
+
+def _build_persistable_chart_cache_meta(
+    *,
+    base_query: str,
+    query_params: Optional[dict],
+    raw_data: Any,
+    statistics: Optional[dict],
+    normalized_records: Optional[List[dict]] = None,
+    device_names: Optional[Dict[str, str]] = None,
+) -> Optional[dict]:
+    if not isinstance(query_params, dict) or not query_params.get("device_codes"):
+        return None
+    records = _coerce_chart_cache_raw_data(raw_data)
+    if not records:
+        return None
+    if len(records) > SESSION_SENSOR_RESULT_CACHE_LIMIT:
+        records = records[:SESSION_SENSOR_RESULT_CACHE_LIMIT]
+    normalized = _coerce_normalized_chart_cache_records(normalized_records)
+    if not normalized:
+        normalized = InsightEngine._normalize_records(records)
+    return {
+        "base_query": str(base_query or query_params.get("user_query") or "").strip(),
+        "query_params": _json_safe_copy(dict(query_params)),
+        "statistics": _json_safe_copy(statistics if isinstance(statistics, dict) else None),
+        "raw_data": _json_safe_copy(records),
+        "normalized_records": _json_safe_copy(normalized),
+        "device_names": _json_safe_copy(dict(device_names or {})),
+        "updated_at": datetime.now().isoformat(),
+    }
+
+
+def _build_persistable_chart_cache_meta_from_session(session_id: str) -> Optional[dict]:
+    cache_payload = _get_session_state(session_id).get("last_sensor_result_cache")
+    if not isinstance(cache_payload, dict):
+        return None
+    return _build_persistable_chart_cache_meta(
+        base_query=str(cache_payload.get("base_query") or "").strip(),
+        query_params=cache_payload.get("query_params") if isinstance(cache_payload.get("query_params"), dict) else None,
+        raw_data=cache_payload.get("raw_data"),
+        statistics=cache_payload.get("statistics") if isinstance(cache_payload.get("statistics"), dict) else None,
+        normalized_records=_coerce_normalized_chart_cache_records(cache_payload.get("normalized_records")),
+        device_names=cache_payload.get("device_names") if isinstance(cache_payload.get("device_names"), dict) else None,
+    )
+
+
+def _coerce_query_result_raw_data(raw_data: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw_data, list):
+        return [item for item in raw_data if isinstance(item, dict)]
+    if isinstance(raw_data, str):
+        try:
+            payload = json.loads(raw_data)
+            if isinstance(payload, list):
+                return [item for item in payload if isinstance(item, dict)]
+        except json.JSONDecodeError:
+            try:
+                payload = ast.literal_eval(raw_data)
+                if isinstance(payload, list):
+                    return [item for item in payload if isinstance(item, dict)]
+            except (ValueError, SyntaxError):
+                return []
+    return []
+
+
+def _rebuild_chart_cache_from_query_params(
+    *,
+    base_query: str,
+    query_params: dict,
+) -> Optional[dict]:
+    if not isinstance(query_params, dict) or not query_params.get("device_codes"):
+        return None
+
+    request = DataQueryRequest(
+        device_codes=[str(code).strip() for code in (query_params.get("device_codes") or []) if str(code).strip()],
+        start_time=str(query_params.get("start_time") or "").strip(),
+        end_time=str(query_params.get("end_time") or "").strip(),
+        data_type=str(query_params.get("data_type") or "ep").strip() or "ep",
+        page=max(int(query_params.get("page") or 1), 1),
+        page_size=max(int(query_params.get("page_size") or 0), 0),
+        tg_values=[str(value).strip() for value in (query_params.get("tg_values") or []) if str(value).strip()],
+        user_query=str(query_params.get("user_query") or base_query or "").strip(),
+        comparison_scope_groups=query_params.get("comparison_scope_groups") if isinstance(query_params.get("comparison_scope_groups"), dict) else None,
+        query_plan=query_params.get("query_plan") if isinstance(query_params.get("query_plan"), dict) else None,
+        value_filter=query_params.get("value_filter") if isinstance(query_params.get("value_filter"), dict) else None,
+    )
+    if not request.start_time or not request.end_time:
+        return None
+
+    if isinstance(request.comparison_scope_groups, dict) and request.comparison_scope_groups:
+        result = _build_comparison_query_result(request)
+    else:
+        result = fetch_sensor_data_with_components(
+            device_codes=request.device_codes,
+            tg_values=request.tg_values,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            data_fetcher=data_fetcher,
+            compressor=None,
+            data_type=request.data_type,
+            page=request.page,
+            page_size=0,
+            output_format="json",
+            user_query=request.user_query,
+            query_plan=request.query_plan,
+            use_aggregation=False,
+            value_filter=request.value_filter,
+        )
+    if not isinstance(result, dict) or not result.get("success"):
+        return None
+
+    raw_records = _coerce_query_result_raw_data(result.get("data"))
+    if not raw_records:
+        return None
+
+    resolved_scope = _build_resolved_scope(query_params)
+    chart_context = _coerce_chart_context_payload(result.get("chart_context"))
+    if isinstance(chart_context, dict):
+        chart_context["cache_hit"] = False
+        chart_context["history_restored"] = True
+        chart_context["cache_restore_mode"] = "history_query"
+
+    return {
+        "base_query": str(base_query or request.user_query or "").strip(),
+        "query_params": dict(query_params),
+        "resolved_scope": resolved_scope,
+        "analysis": result.get("analysis") if isinstance(result.get("analysis"), dict) else None,
+        "table_type": "sensor_data",
+        "chart_specs": list(result.get("chart_specs") or []),
+        "statistics": result.get("statistics") if isinstance(result.get("statistics"), dict) else None,
+        "raw_data": raw_records,
+        "normalized_records": InsightEngine._normalize_records(raw_records),
+        "device_names": _build_device_name_map_from_scope(resolved_scope),
+        "chart_context": chart_context,
+    }
+
+
+def _build_chart_follow_up_cache_payload(
+    *,
+    session_id: str,
+    effective_message: str,
+    chart_follow_up_base_query: Optional[str],
+    alias_memory: Optional[Dict[str, Any]],
+    learned_aliases: Optional[List[dict]],
+    restore_mode: Optional[str] = None,
+) -> Optional[dict]:
+    base_query = str(chart_follow_up_base_query or "").strip()
+    if not base_query:
+        return None
+    state = _get_session_state(session_id)
+    cache_payload = state.get("last_sensor_result_cache")
+    if not isinstance(cache_payload, dict):
+        return None
+    cached_base_query = str(cache_payload.get("base_query") or "").strip()
+    if cached_base_query and cached_base_query != base_query:
+        normalized_cached_base_query = _normalize_chart_cache_base_query(cached_base_query)
+        normalized_base_query = _normalize_chart_cache_base_query(base_query)
+        if (
+            normalized_cached_base_query
+            and normalized_base_query
+            and normalized_cached_base_query != normalized_base_query
+        ):
+            return None
+    query_params = cache_payload.get("query_params") if isinstance(cache_payload.get("query_params"), dict) else None
+    raw_data = _coerce_chart_cache_raw_data(cache_payload.get("raw_data"))
+    if not raw_data or not query_params:
+        return None
+
+    normalized_records = _coerce_normalized_chart_cache_records(cache_payload.get("normalized_records"))
+    if not normalized_records:
+        normalized_records = InsightEngine._normalize_records(raw_data)
+    if not normalized_records:
+        return None
+    data_type = str(query_params.get("data_type") or "ep")
+    device_codes = [str(code).strip() for code in (query_params.get("device_codes") or []) if str(code).strip()]
+    device_names = cache_payload.get("device_names") if isinstance(cache_payload.get("device_names"), dict) else None
+    cached_chart_context = _coerce_chart_context_payload(cache_payload.get("chart_context"))
+    comparison_slots = []
+    if isinstance(cached_chart_context, dict) and isinstance(cached_chart_context.get("comparison_slots"), list):
+        comparison_slots = [dict(item) for item in cached_chart_context.get("comparison_slots") if isinstance(item, dict)]
+    analysis = InsightEngine.build_analysis(
+        normalized_records=normalized_records,
+        statistics=cache_payload.get("statistics") if isinstance(cache_payload.get("statistics"), dict) else None,
+        data_type=data_type,
+        device_codes=device_codes,
+        device_names=device_names,
+        user_query=effective_message,
+        comparison_slots=comparison_slots,
+    )
+    chart_specs = InsightEngine.build_chart_specs(
+        normalized_records=normalized_records,
+        analysis=analysis,
+        data_type=data_type,
+        device_names=device_names,
+        user_query=effective_message,
+        comparison_slots=comparison_slots,
+    )
+    if not chart_specs:
+        return None
+
+    chart_title = str(chart_specs[0].get("title") or "图表").strip()
+    resolved_scope = _build_resolved_scope(
+        query_params,
+        alias_memory=alias_memory,
+        learned_aliases=learned_aliases or [],
+    )
+    chart_context = _build_chart_context_payload(
+        session_id=session_id,
+        query_params=query_params,
+        resolved_scope=resolved_scope,
+        normalized_records=normalized_records,
+        analysis=analysis,
+        chart_specs=chart_specs,
+        user_query=effective_message,
+        cache_key=(cached_chart_context or {}).get("cache_key"),
+        cache_hit=restore_mode != "history_query",
+    )
+    if isinstance(chart_context, dict):
+        chart_context["history_restored"] = restore_mode in {"history_cache", "history_query"}
+        chart_context["cache_restore_mode"] = restore_mode or "memory_cache"
+    _store_session_sensor_result_cache(
+        session_id,
+        base_query=base_query,
+        query_params=query_params,
+        resolved_scope=resolved_scope,
+        analysis=analysis,
+        table_type=str(cache_payload.get("table_type") or ""),
+        chart_specs=chart_specs,
+        statistics=cache_payload.get("statistics") if isinstance(cache_payload.get("statistics"), dict) else None,
+        raw_data=raw_data,
+        normalized_records=normalized_records,
+        chart_context=chart_context,
+    )
+    last_context = state.get("last_sensor_query_context")
+    if isinstance(last_context, dict):
+        last_context["chart_count"] = len(chart_specs)
+        last_context["updated_at"] = datetime.now().isoformat()
+
+    if restore_mode == "history_cache":
+        response_text = f"已从聊天历史恢复上一轮图表缓存，直接切换为{chart_title}展示，无需重新查询数据库。"
+    elif restore_mode == "history_query":
+        response_text = f"已基于聊天历史恢复上一轮查询条件，并重新加载数据后切换为{chart_title}展示。"
+    else:
+        response_text = f"已基于上一轮查询结果直接切换为{chart_title}展示，无需重新查询数据库。"
+
+    return {
+        "success": True,
+        "response": response_text,
+        "show_table": False,
+        "table_type": "",
+        "query_params": query_params,
+        "resolved_scope": resolved_scope,
+        "analysis": analysis,
+        "chart_specs": chart_specs,
+        "table_preview": None,
+        "show_charts": True,
+        "chart_context": chart_context,
+        "clarification_required": False,
+        "clarification_candidates": None,
+    }
+
+
+def _is_short_affirmative_chart_follow_up(message: str) -> bool:
+    compact = re.sub(r"\s+", "", str(message or "")).strip().lower()
+    return compact in CHART_FOLLOW_UP_AFFIRMATIVES
+
+
+def _extract_chart_follow_up_directive(message: str, analysis_mode: str = "") -> Optional[str]:
+    compact = re.sub(r"\s+", "", str(message or "")).strip().lower()
+    if not compact:
+        return None
+    if DEVICE_CODE_PATTERN.search(compact):
+        return None
+    if _is_short_affirmative_chart_follow_up(compact):
+        return "画图"
+    if len(compact) > 20:
+        return None
+    if not any(keyword in compact for keyword in CHART_FOLLOW_UP_KEYWORDS):
+        return None
+    if any(token in compact for token in ("散点",)):
+        return "画散点图"
+    if any(token in compact for token in ("雷达",)):
+        return "画雷达图"
+    if any(token in compact for token in ("箱线",)):
+        return "画箱线图"
+    if any(token in compact for token in ("热力",)):
+        return "画热力图"
+    if any(token in compact for token in ("柱状",)):
+        return "画柱状图"
+    if any(token in compact for token in ("对比",)):
+        return "画对比图"
+    if any(token in compact for token in ("折线", "曲线", "趋势", "图", "图表", "画图", "画一下", "画张图", "帮我画", "可视化", "chart", "plot", "echart", "echarts", "matplotlib")):
+        return "画图"
+    return None
+
+
+def _recover_chart_follow_up_context(
+    *,
+    session_id: str,
+    user_id: Optional[str],
+    history: Optional[List[dict]],
+    expected_base_query: Optional[str] = None,
+    restore_session_cache: bool = False,
+    allow_query_rebuild: bool = False,
+) -> Optional[Dict[str, Any]]:
+    normalized_expected_base_query = _normalize_chart_cache_base_query(expected_base_query or "")
+
+    def _matches_expected_base_query(base_query: str) -> bool:
+        if not normalized_expected_base_query:
+            return True
+        normalized_base_query = _normalize_chart_cache_base_query(base_query)
+        return bool(normalized_base_query) and normalized_base_query == normalized_expected_base_query
+
+    def _extract_from_meta(meta: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(meta, dict):
+            return None
+        query_params = meta.get("query_params") if isinstance(meta.get("query_params"), dict) else None
+        if not isinstance(query_params, dict) or not query_params.get("device_codes"):
+            return None
+        base_query = str(query_params.get("user_query") or meta.get("original_question") or "").strip()
+        if not base_query or not _matches_expected_base_query(base_query):
+            return None
+        persisted_chart_cache = meta.get("_chart_cache") if isinstance(meta.get("_chart_cache"), dict) else None
+        return {
+            "base_query": base_query,
+            "query_params": dict(query_params),
+            "analysis_mode": str((meta.get("analysis") or {}).get("mode") or "").strip(),
+            "table_type": str(meta.get("table_type") or "").strip(),
+            "resolved_scope": meta.get("resolved_scope") if isinstance(meta.get("resolved_scope"), dict) else None,
+            "analysis": meta.get("analysis") if isinstance(meta.get("analysis"), dict) else None,
+            "chart_specs": [dict(item) for item in (meta.get("chart_specs") or []) if isinstance(item, dict)],
+            "chart_context": _coerce_chart_context_payload(meta.get("chart_context")),
+            "persisted_chart_cache": dict(persisted_chart_cache) if isinstance(persisted_chart_cache, dict) else None,
+        }
+
+    def _apply_recovered_session_cache(recovered: Dict[str, Any]) -> Dict[str, Any]:
+        restore_mode = None
+        session_state = _get_session_state(session_id)
+        session_state["last_sensor_query_context"] = {
+            "base_query": str(recovered.get("base_query") or "").strip(),
+            "query_params": dict(recovered.get("query_params") or {}),
+            "analysis_mode": str(recovered.get("analysis_mode") or "").strip(),
+            "table_type": str(recovered.get("table_type") or "").strip(),
+            "chart_count": len(recovered.get("chart_specs") or []),
+            "updated_at": datetime.now().isoformat(),
+        }
+
+        persisted_chart_cache = recovered.get("persisted_chart_cache") if isinstance(recovered.get("persisted_chart_cache"), dict) else None
+        if isinstance(persisted_chart_cache, dict):
+            restored_chart_context = _coerce_chart_context_payload(recovered.get("chart_context"))
+            if isinstance(restored_chart_context, dict):
+                restored_chart_context["cache_hit"] = True
+                restored_chart_context["history_restored"] = True
+                restored_chart_context["cache_restore_mode"] = "history_cache"
+            _store_session_sensor_result_cache(
+                session_id,
+                base_query=str(recovered.get("base_query") or "").strip(),
+                query_params=recovered.get("query_params") if isinstance(recovered.get("query_params"), dict) else None,
+                resolved_scope=recovered.get("resolved_scope") if isinstance(recovered.get("resolved_scope"), dict) else None,
+                analysis=recovered.get("analysis") if isinstance(recovered.get("analysis"), dict) else None,
+                table_type=str(recovered.get("table_type") or "").strip(),
+                chart_specs=recovered.get("chart_specs") if isinstance(recovered.get("chart_specs"), list) else None,
+                statistics=persisted_chart_cache.get("statistics") if isinstance(persisted_chart_cache.get("statistics"), dict) else None,
+                raw_data=persisted_chart_cache.get("raw_data"),
+                normalized_records=_coerce_normalized_chart_cache_records(persisted_chart_cache.get("normalized_records")),
+                chart_context=restored_chart_context,
+            )
+            state_cache = session_state.get("last_sensor_result_cache")
+            if isinstance(state_cache, dict) and isinstance(persisted_chart_cache.get("device_names"), dict):
+                state_cache["device_names"] = dict(persisted_chart_cache.get("device_names") or {})
+            restore_mode = "history_cache"
+        elif allow_query_rebuild:
+            rebuilt_cache = _rebuild_chart_cache_from_query_params(
+                base_query=str(recovered.get("base_query") or "").strip(),
+                query_params=recovered.get("query_params") if isinstance(recovered.get("query_params"), dict) else {},
+            )
+            if isinstance(rebuilt_cache, dict):
+                _store_session_sensor_result_cache(
+                    session_id,
+                    base_query=str(rebuilt_cache.get("base_query") or "").strip(),
+                    query_params=rebuilt_cache.get("query_params") if isinstance(rebuilt_cache.get("query_params"), dict) else None,
+                    resolved_scope=rebuilt_cache.get("resolved_scope") if isinstance(rebuilt_cache.get("resolved_scope"), dict) else None,
+                    analysis=rebuilt_cache.get("analysis") if isinstance(rebuilt_cache.get("analysis"), dict) else None,
+                    table_type=str(rebuilt_cache.get("table_type") or "").strip(),
+                    chart_specs=rebuilt_cache.get("chart_specs") if isinstance(rebuilt_cache.get("chart_specs"), list) else None,
+                    statistics=rebuilt_cache.get("statistics") if isinstance(rebuilt_cache.get("statistics"), dict) else None,
+                    raw_data=rebuilt_cache.get("raw_data"),
+                    normalized_records=_coerce_normalized_chart_cache_records(rebuilt_cache.get("normalized_records")),
+                    chart_context=rebuilt_cache.get("chart_context") if isinstance(rebuilt_cache.get("chart_context"), dict) else None,
+                )
+                state_cache = session_state.get("last_sensor_result_cache")
+                if isinstance(state_cache, dict) and isinstance(rebuilt_cache.get("device_names"), dict):
+                    state_cache["device_names"] = dict(rebuilt_cache.get("device_names") or {})
+                restore_mode = "history_query"
+
+        recovered["restore_mode"] = restore_mode
+        return recovered
+
+    for item in reversed(history or []):
+        if not isinstance(item, dict):
+            continue
+        recovered = _extract_from_meta(item.get("meta"))
+        if recovered:
+            return _apply_recovered_session_cache(recovered) if restore_session_cache else recovered
+
+    try:
+        resolved_user_id = chat_memory_service.resolve_chat_user_id(user_id, session_id)
+        history_rows = user_memory_store.list_chat_history(session_id=session_id, user_id=resolved_user_id, limit=20)
+    except Exception:
+        history_rows = user_memory_store.list_chat_history(session_id=session_id, user_id=None, limit=20)
+
+    for item in reversed(history_rows or []):
+        if not isinstance(item, dict) or str(item.get("role") or "").strip().lower() != "assistant":
+            continue
+        recovered = _extract_from_meta(item.get("message_meta"))
+        if recovered:
+            return _apply_recovered_session_cache(recovered) if restore_session_cache else recovered
+    return None
 
 
 def _build_confirmed_project_payload(payload: Optional[dict]) -> Optional[dict]:
@@ -563,11 +1199,19 @@ def _extract_alias_confirmation_from_message(message: str) -> Optional[dict]:
 
 
 def _create_chat_agent(alias_memory: Optional[Dict[str, Any]] = None, confirmed_project: Optional[Dict[str, Any]] = None):
-    orchestrator_type = str(getattr(config.agent, "orchestrator_type", "react") or "react").strip().lower()
+    from src.agent.dag_orchestrator import DAGOrchestrator
+    from src.agent.orchestrator import create_agent_with_streaming
+
+    llm_client = _get_llm_client()
+    orchestrator_type = str(getattr(config.agent, "orchestrator_type", "dag") or "dag").strip().lower()
+    force_dag_for_chat = str(os.getenv("CHAT_FORCE_DAG", "true") or "true").strip().lower() not in {"0", "false", "no"}
+    if force_dag_for_chat and orchestrator_type != "dag":
+        logger.warning("chat.agent.override orchestrator=%s -> dag", orchestrator_type)
+        orchestrator_type = "dag"
     if orchestrator_type == "dag":
         logger.info("chat.agent.create orchestrator=dag")
         return DAGOrchestrator(
-            llm=llm,
+            llm=llm_client,
             metadata_engine=metadata_engine,
             data_fetcher=data_fetcher,
             cache_manager=None,
@@ -578,8 +1222,8 @@ def _create_chat_agent(alias_memory: Optional[Dict[str, Any]] = None, confirmed_
 
     logger.info("chat.agent.create orchestrator=react")
     return create_agent_with_streaming(
-        llm=llm,
-        llm_non_streaming=llm,
+        llm=llm_client,
+        llm_non_streaming=llm_client,
         metadata_engine=metadata_engine,
         data_fetcher=data_fetcher,
         cache_manager=None,
@@ -595,6 +1239,53 @@ def _prepare_chat_context(request: "ChatRequest") -> Dict[str, Any]:
     learned_aliases: List[dict] = []
     session_state = _get_session_state(session_id)
     confirmed_project = _build_confirmed_project_payload(session_state.get("confirmed_project"))
+    chart_follow_up_base_query = str(request.chart_follow_up_base_query or "").strip() or None
+
+    recovered_chart_context = None
+    last_sensor_query_context = session_state.get("last_sensor_query_context")
+    last_sensor_result_cache = session_state.get("last_sensor_result_cache")
+    chart_follow_up_restore_mode = None
+    chart_directive = _extract_chart_follow_up_directive(request.message)
+    should_recover_chart_follow_up = bool(
+        chart_directive
+        and (
+            (not chart_follow_up_base_query and not isinstance(last_sensor_query_context, dict))
+            or not isinstance(last_sensor_result_cache, dict)
+        )
+    )
+    if should_recover_chart_follow_up:
+        recovered_chart_context = _recover_chart_follow_up_context(
+            session_id=session_id,
+            user_id=request.user_id,
+            history=history,
+            expected_base_query=chart_follow_up_base_query,
+            restore_session_cache=True,
+            allow_query_rebuild=True,
+        )
+        if isinstance(recovered_chart_context, dict):
+            last_sensor_query_context = recovered_chart_context
+            last_sensor_result_cache = session_state.get("last_sensor_result_cache")
+            chart_follow_up_base_query = str(recovered_chart_context.get("base_query") or chart_follow_up_base_query or "").strip() or None
+            chart_follow_up_restore_mode = str(recovered_chart_context.get("restore_mode") or "").strip() or None
+
+    normalized_last_sensor_query_context = last_sensor_query_context if isinstance(last_sensor_query_context, dict) else {}
+    if chart_follow_up_base_query or normalized_last_sensor_query_context:
+        base_query = chart_follow_up_base_query or str(normalized_last_sensor_query_context.get("base_query") or "").strip()
+        analysis_mode = str(normalized_last_sensor_query_context.get("analysis_mode") or "").strip()
+        chart_directive = _extract_chart_follow_up_directive(request.message, analysis_mode)
+        if base_query and chart_directive:
+            effective_message = f"{base_query} {chart_directive}".strip()
+            session_state["last_user_query"] = effective_message
+            return {
+                "session_id": session_id,
+                "history": history,
+                "effective_message": effective_message,
+                "alias_memory": session_state.get("device_aliases", {}),
+                "confirmed_project": confirmed_project,
+                "learned_aliases": learned_aliases,
+                "chart_follow_up_base_query": base_query,
+                "chart_follow_up_restore_mode": chart_follow_up_restore_mode,
+            }
 
     scope_action = _extract_alias_action(request.alias_confirmation) or _extract_scope_control_command(request.message)
     if scope_action:
@@ -657,6 +1348,8 @@ def _prepare_chat_context(request: "ChatRequest") -> Dict[str, Any]:
             "alias_memory": session_state.get("device_aliases", {}),
             "confirmed_project": confirmed_project,
             "learned_aliases": learned_aliases,
+            "chart_follow_up_base_query": chart_follow_up_base_query,
+            "chart_follow_up_restore_mode": chart_follow_up_restore_mode,
         }
 
     confirmed_alias = _apply_alias_confirmation(session_id, request.alias_confirmation, source="button_confirm")
@@ -685,6 +1378,8 @@ def _prepare_chat_context(request: "ChatRequest") -> Dict[str, Any]:
         "alias_memory": session_state.get("device_aliases", {}),
         "confirmed_project": _build_confirmed_project_payload(session_state.get("confirmed_project")),
         "learned_aliases": learned_aliases,
+        "chart_follow_up_base_query": chart_follow_up_base_query,
+        "chart_follow_up_restore_mode": chart_follow_up_restore_mode,
     }
 
 
@@ -981,6 +1676,42 @@ def _log_structured(event: str, **fields) -> None:
     )
 
 
+def _log_chart_follow_up_debug(
+    *,
+    stage: str,
+    request_id: str,
+    session_id: str,
+    effective_message: str,
+    chart_follow_up_base_query: Optional[str],
+    clarification_required: Optional[bool],
+    cache_hit: Optional[bool],
+    show_charts: Optional[bool],
+) -> None:
+    payload = {
+        "stage": stage,
+        "request_id": request_id,
+        "session_id": session_id,
+        "effective_message": _short_text(effective_message, 200),
+        "chart_follow_up_base_query": _short_text(chart_follow_up_base_query or "", 200) or None,
+        "clarification_required": clarification_required,
+        "cache_hit": cache_hit,
+        "show_charts": show_charts,
+        "timestamp": datetime.now().isoformat(),
+    }
+    _log_structured(
+        "chat.chart_follow_up.debug",
+        **payload,
+    )
+    try:
+        debug_dir = os.path.join(os.getcwd(), "tmp")
+        os.makedirs(debug_dir, exist_ok=True)
+        debug_file = os.path.join(debug_dir, "chat_chart_follow_up_debug.jsonl")
+        with open(debug_file, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"event": "chat.chart_follow_up.debug", **payload}, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 # 初始化组件
 def _build_error_payload(message: str, *, code: str = "INTERNAL_ERROR", request_id: Optional[str] = None, detail=None) -> dict:
     payload = {
@@ -1021,6 +1752,7 @@ def _build_empty_result_payload(
     statistics=None,
     analysis=None,
     chart_specs=None,
+    chart_context=None,
     show_charts: bool = False,
     is_sampled: bool = False,
     is_aggregated: bool = False,
@@ -1037,6 +1769,7 @@ def _build_empty_result_payload(
         "statistics": statistics,
         "analysis": analysis,
         "chart_specs": chart_specs,
+        "chart_context": chart_context,
         "show_charts": show_charts,
         "is_sampled": is_sampled,
         "is_aggregated": is_aggregated,
@@ -1177,6 +1910,24 @@ def _build_comparison_query_result(request: "DataQueryRequest") -> Dict[str, Any
         )
     )
 
+    comparison_targets: List[str] = []
+    if isinstance(request.query_plan, dict):
+        raw_targets = request.query_plan.get("comparison_targets")
+        if isinstance(raw_targets, list):
+            comparison_targets = [str(item).strip() for item in raw_targets if str(item or "").strip()]
+        if not comparison_targets and isinstance(request.query_plan.get("search_targets"), list):
+            search_targets = [str(item).strip() for item in request.query_plan.get("search_targets") if str(item or "").strip()]
+            if len(search_targets) > 1:
+                comparison_targets = search_targets
+    if not comparison_targets and len(requested_codes) > 1:
+        comparison_targets = list(requested_codes)
+
+    comparison_slots = InsightEngine.build_comparison_slots(
+        comparison_targets=comparison_targets,
+        comparison_scope_groups=comparison_scope_groups,
+        device_names=device_names,
+    )
+
     analysis, chart_specs = InsightEngine.build(
         deduped_records,
         None,
@@ -1184,7 +1935,9 @@ def _build_comparison_query_result(request: "DataQueryRequest") -> Dict[str, Any
         device_codes=request.device_codes,
         device_names=device_names,
         user_query=request.user_query,
+        comparison_slots=comparison_slots,
     )
+    normalized_records = InsightEngine._normalize_records(deduped_records)
 
     if isinstance(analysis, dict) and len(target_profiles) > 1:
         analysis.setdefault("mode", "comparison")
@@ -1257,6 +2010,48 @@ def _build_comparison_query_result(request: "DataQueryRequest") -> Dict[str, Any
         page_records = deduped_records
         has_more = False
 
+    resolved_scope_items = [
+        {
+            "device": str(item.get("device") or "").strip(),
+            "name": item.get("name"),
+            "project_id": item.get("project_id"),
+            "project_name": item.get("project_name"),
+            "project_code_name": item.get("project_code_name"),
+            "tg": str(item.get("tg") or "").strip() or None,
+            "source": item.get("source") or "comparison_scope",
+            "can_switch": _scope_item_can_switch(item),
+        }
+        for scopes in comparison_scope_groups.values()
+        for item in scopes
+        if isinstance(item, dict) and str(item.get("device") or "").strip()
+    ]
+    resolved_scope = _finalize_resolved_scope_payload(
+        title="当前确认作用域",
+        items=resolved_scope_items,
+        tg_count=len({str(item.get("tg") or "").strip() for item in resolved_scope_items if str(item.get("tg") or "").strip()}),
+        aggregation_scope_codes=[],
+    ) if resolved_scope_items else None
+    chart_context = _build_chart_context_payload(
+        session_id="query",
+        query_params={
+            "device_codes": list(request.device_codes or []),
+            "tg_values": list(request.tg_values or []),
+            "comparison_scope_groups": comparison_scope_groups,
+            "start_time": request.start_time,
+            "end_time": request.end_time,
+            "data_type": request.data_type,
+            "page": request.page,
+            "page_size": request.page_size,
+            "user_query": request.user_query,
+            "query_plan": request.query_plan,
+        },
+        resolved_scope=resolved_scope,
+        normalized_records=normalized_records,
+        analysis=analysis,
+        chart_specs=chart_specs,
+        user_query=request.user_query,
+    )
+
     return {
         "success": True,
         "data": page_records,
@@ -1269,6 +2064,7 @@ def _build_comparison_query_result(request: "DataQueryRequest") -> Dict[str, Any
         "analysis": analysis,
         "focused_table": None,
         "chart_specs": chart_specs,
+        "chart_context": chart_context,
         "show_charts": False,
         "failed_collections": sorted(set(failed_collections)),
         "is_sampled": False,
@@ -1324,18 +2120,25 @@ entity_resolver = ChromaEntityResolver(
     enabled=os.getenv("ENTITY_RESOLVER_ENABLED", "true").lower() == "true",
 )
 
-# 初始化 LLM
-vllm_base = os.getenv("VLLM_API_BASE") or os.getenv("LLM_BASE_URL")
-http_client = httpx.Client(trust_env=False, timeout=httpx.Timeout(300.0))  # 增加到 5 分钟
-llm = ChatOpenAI(
-    model=os.getenv("VLLM_MODEL") or os.getenv("LLM_MODEL", "/models/Qwen3-32B-AWQ"),
-    openai_api_base=vllm_base,
-    openai_api_key=os.getenv("VLLM_API_KEY") or os.getenv("LLM_API_KEY") or "not-needed",
-    temperature=0.7,
-    max_tokens=16384,
-    http_client=http_client,
-    request_timeout=300.0,  # 添加请求超时设置
-)
+def _get_llm_client():
+    global _LLM_CLIENT
+    if _LLM_CLIENT is not None:
+        return _LLM_CLIENT
+
+    from langchain_openai import ChatOpenAI
+
+    vllm_base = os.getenv("VLLM_API_BASE") or os.getenv("LLM_BASE_URL")
+    http_client = httpx.Client(trust_env=False, timeout=httpx.Timeout(300.0))
+    _LLM_CLIENT = ChatOpenAI(
+        model=os.getenv("VLLM_MODEL") or os.getenv("LLM_MODEL", "/models/Qwen3-32B-AWQ"),
+        openai_api_base=vllm_base,
+        openai_api_key=os.getenv("VLLM_API_KEY") or os.getenv("LLM_API_KEY") or "not-needed",
+        temperature=0.7,
+        max_tokens=16384,
+        http_client=http_client,
+        request_timeout=300.0,
+    )
+    return _LLM_CLIENT
 
 
 def _coerce_llm_text_content(content: Any) -> str:
@@ -1377,7 +2180,7 @@ def _rewrite_memory_command_with_llm(message: str) -> Optional[Dict[str, Any]]:
         f"Input: {content}"
     )
     try:
-        response = llm.invoke(prompt)
+        response = _get_llm_client().invoke(prompt)
         payload = parse_memory_rewrite_json(_coerce_llm_text_content(getattr(response, "content", response)))
     except Exception as exc:
         logger.warning("memory.rewrite.llm.failed message=%s error=%s", _short_text(content, 80), exc)
@@ -1426,6 +2229,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     user_id: Optional[str] = None
     alias_confirmation: Optional[dict] = None
+    chart_follow_up_base_query: Optional[str] = None
 
 
 class MemoryAliasCreateRequest(BaseModel):
@@ -1552,6 +2356,22 @@ async def get_chat_sessions(user_id: str = "", session_id: str = "", limit: int 
     return _build_success_payload(request_id=request_id, user_id=resolved_user_id, items=items, total=len(items))
 
 
+@app.delete("/api/chat/history")
+async def clear_chat_history(user_id: str = "", session_id: str = ""):
+    request_id = uuid4().hex
+    resolved_session_id = str(session_id or "").strip() or None
+    resolved_user_id = str(user_id or "").strip() or None
+    if not resolved_session_id and not resolved_user_id:
+        raise HTTPException(status_code=400, detail="session_id 或 user_id 至少提供一个")
+    deleted_count = user_memory_store.clear_chat_history(session_id=resolved_session_id, user_id=resolved_user_id)
+    return _build_success_payload(
+        request_id=request_id,
+        session_id=resolved_session_id,
+        user_id=resolved_user_id,
+        deleted_count=deleted_count,
+    )
+
+
 @app.get("/api/semantic-rules")
 async def list_semantic_rules(keyword: str = "", scope_type: str = "", entity_type: str = "", status: str = "", scope_value: str = ""):
     request_id = uuid4().hex
@@ -1586,6 +2406,26 @@ async def chat_stream(request: ChatRequest):
         alias_memory = context["alias_memory"]
         confirmed_project = context["confirmed_project"]
         learned_aliases = context["learned_aliases"]
+        chart_follow_up_base_query = context.get("chart_follow_up_base_query")
+        should_log_chart_follow_up_debug = bool(chart_follow_up_base_query)
+        if should_log_chart_follow_up_debug:
+            try:
+                debug_dir = os.path.join(os.getcwd(), "tmp")
+                os.makedirs(debug_dir, exist_ok=True)
+                debug_file = os.path.join(debug_dir, "chat_chart_follow_up_debug.jsonl")
+                with open(debug_file, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({
+                        "event": "chat.chart_follow_up.entry",
+                        "request_id": request_id,
+                        "session_id": session_id,
+                        "cwd": os.getcwd(),
+                        "app_file": __file__,
+                        "effective_message": _short_text(effective_message, 200),
+                        "chart_follow_up_base_query": _short_text(chart_follow_up_base_query or "", 200),
+                        "timestamp": datetime.now().isoformat(),
+                    }, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
         user_id = chat_memory_service.resolve_chat_user_id(request.user_id, session_id)
         intent_type = chat_memory_service.classify_chat_intent(request.message)
         memory_action_result = None
@@ -1610,6 +2450,59 @@ async def chat_stream(request: ChatRequest):
             learned_alias_count=len(learned_aliases),
             session_alias_count=len(alias_memory or {}),
         )
+
+        cached_chart_payload = _build_chart_follow_up_cache_payload(
+            session_id=session_id,
+            effective_message=effective_message,
+            chart_follow_up_base_query=chart_follow_up_base_query,
+            alias_memory=alias_memory,
+            learned_aliases=learned_aliases,
+            restore_mode=context.get("chart_follow_up_restore_mode"),
+        )
+        if cached_chart_payload:
+            cached_chart_context = cached_chart_payload.get("chart_context") if isinstance(cached_chart_payload.get("chart_context"), dict) else {}
+            _log_chart_follow_up_debug(
+                stage="cache_hit_complete",
+                request_id=request_id,
+                session_id=session_id,
+                effective_message=effective_message,
+                chart_follow_up_base_query=chart_follow_up_base_query,
+                clarification_required=bool(cached_chart_payload.get("clarification_required", False)),
+                cache_hit=bool(cached_chart_context.get("cache_hit", False)),
+                show_charts=bool(cached_chart_payload.get("show_charts", False)),
+            )
+            step_name = "复用上一轮查询结果"
+            step_started_at = round(time.time() * 1000, 2)
+            yield f"data: {json.dumps({'type': 'step_start', 'step': step_name, 'node_name': 'chart_cache_hit', 'timestamp_ms': step_started_at}, ensure_ascii=False)}\n\n"
+            for chunk in _iter_answer_delta_chunks(str(cached_chart_payload.get("response") or "")):
+                yield f"data: {json.dumps({'type': 'answer_delta', 'delta': chunk}, ensure_ascii=False)}\n\n"
+                if ANSWER_STREAM_CHUNK_DELAY_MS > 0:
+                    await asyncio.sleep(ANSWER_STREAM_CHUNK_DELAY_MS / 1000)
+            yield f"data: {json.dumps({'type': 'step_done', 'step': step_name, 'node_name': 'chart_cache_hit', 'info': '已基于缓存重建图表', 'duration_ms': 0}, ensure_ascii=False)}\n\n"
+            complete_payload = {
+                "type": "complete",
+                "request_id": request_id,
+                "session_id": session_id,
+                "original_question": effective_message,
+                "intent_type": "data_query",
+                "memory_action_result": None,
+                "memory_suggestion": None,
+                "total_duration_ms": 0,
+                **cached_chart_payload,
+            }
+            chat_memory_service.record_chat_message(
+                session_id=session_id,
+                user_id=user_id,
+                role="assistant",
+                message=complete_payload.get("response") or "",
+                intent_type="data_query",
+                message_meta={
+                    **{k: v for k, v in complete_payload.items() if k != "type"},
+                    "_chart_cache": _build_persistable_chart_cache_meta_from_session(session_id),
+                },
+            )
+            yield f"data: {json.dumps(complete_payload, ensure_ascii=False)}\n\n"
+            return
 
         project_scope_action = _extract_alias_action(request.alias_confirmation)
         if isinstance(project_scope_action, dict) and project_scope_action.get("action") == "confirm_project_scope":
@@ -1743,11 +2636,26 @@ async def chat_stream(request: ChatRequest):
                     response_text = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()
                     analysis = event.get("analysis") or {}
                     chart_specs = event.get("chart_specs") or []
+                    raw_chart_cache = event.get("_chart_cache") if isinstance(event.get("_chart_cache"), dict) else {}
                     query_params = event.get("query_params")
                     resolved_scope = _build_resolved_scope(
                         query_params,
                         alias_memory=alias_memory,
                         learned_aliases=learned_aliases,
+                    )
+                    normalized_records = _coerce_normalized_chart_cache_records(raw_chart_cache.get("normalized_records"))
+                    if not normalized_records:
+                        normalized_records = InsightEngine._normalize_records(
+                            _coerce_chart_cache_raw_data(raw_chart_cache.get("raw_data"))
+                        )
+                    chart_context = _coerce_chart_context_payload(event.get("chart_context")) or _build_chart_context_payload(
+                        session_id=session_id,
+                        query_params=query_params,
+                        resolved_scope=resolved_scope,
+                        normalized_records=normalized_records,
+                        analysis=analysis if isinstance(analysis, dict) else None,
+                        chart_specs=chart_specs if isinstance(chart_specs, list) else [],
+                        user_query=effective_message,
                     )
                     _log_structured(
                         "chat.stream.final",
@@ -1799,6 +2707,17 @@ async def chat_stream(request: ChatRequest):
                             logger.warning("chat.stream.project_stats_fallback.failed request_id=%s error=%s", request_id, exc)
 
                     clarification_required = bool(event.get("clarification_required", False))
+                    if should_log_chart_follow_up_debug:
+                        _log_chart_follow_up_debug(
+                            stage="agent_complete",
+                            request_id=request_id,
+                            session_id=session_id,
+                            effective_message=effective_message,
+                            chart_follow_up_base_query=chart_follow_up_base_query,
+                            clarification_required=clarification_required,
+                            cache_hit=bool((chart_context or {}).get("cache_hit")) if isinstance(chart_context, dict) else False,
+                            show_charts=bool(event.get("show_charts", False)),
+                        )
                     memory_suggestion = chat_memory_service.build_memory_suggestion(
                         request.message,
                         user_id=user_id,
@@ -1823,6 +2742,7 @@ async def chat_stream(request: ChatRequest):
                         "resolved_scope": resolved_scope,
                         "analysis": event.get("analysis"),
                         "chart_specs": event.get("chart_specs"),
+                        "chart_context": chart_context,
                         "table_preview": event.get("table_preview"),
                         "total_duration_ms": event.get("total_duration_ms"),
                         "show_charts": event.get("show_charts", False),
@@ -1831,6 +2751,37 @@ async def chat_stream(request: ChatRequest):
                         "memory_action_result": memory_action_result or memory_effect_payload,
                         "memory_suggestion": memory_suggestion,
                     }
+                    if isinstance(query_params, dict) and query_params.get("device_codes"):
+                        session_state = _get_session_state(session_id)
+                        session_state["last_sensor_query_context"] = {
+                            "base_query": str(chart_follow_up_base_query or effective_message or "").strip(),
+                            "query_params": dict(query_params),
+                            "analysis_mode": str((event.get("analysis") or {}).get("mode") or "").strip(),
+                            "table_type": table_type,
+                            "chart_count": len(chart_specs) if isinstance(chart_specs, list) else 0,
+                            "updated_at": datetime.now().isoformat(),
+                        }
+                        _store_session_sensor_result_cache(
+                            session_id,
+                            base_query=str(chart_follow_up_base_query or effective_message or "").strip(),
+                            query_params=query_params,
+                            resolved_scope=resolved_scope,
+                            analysis=event.get("analysis") if isinstance(event.get("analysis"), dict) else None,
+                            table_type=table_type,
+                            chart_specs=chart_specs if isinstance(chart_specs, list) else [],
+                            statistics=raw_chart_cache.get("statistics") if isinstance(raw_chart_cache.get("statistics"), dict) else None,
+                            raw_data=raw_chart_cache.get("raw_data"),
+                            normalized_records=normalized_records,
+                            chart_context=chart_context,
+                        )
+                    persisted_chart_cache = _build_persistable_chart_cache_meta(
+                        base_query=str(chart_follow_up_base_query or effective_message or "").strip(),
+                        query_params=query_params if isinstance(query_params, dict) else None,
+                        raw_data=raw_chart_cache.get("raw_data"),
+                        statistics=raw_chart_cache.get("statistics") if isinstance(raw_chart_cache.get("statistics"), dict) else None,
+                        normalized_records=normalized_records,
+                        device_names=_build_device_name_map_from_scope(resolved_scope),
+                    )
                     chat_memory_service.record_chat_message(
                         session_id=session_id,
                         user_id=user_id,
@@ -1850,6 +2801,7 @@ async def chat_stream(request: ChatRequest):
                             "resolved_scope": resolved_scope,
                             "analysis": event.get("analysis"),
                             "chart_specs": event.get("chart_specs"),
+                            "chart_context": chart_context,
                             "table_preview": event.get("table_preview"),
                             "total_duration_ms": event.get("total_duration_ms"),
                             "show_charts": event.get("show_charts", False),
@@ -1857,11 +2809,23 @@ async def chat_stream(request: ChatRequest):
                             "clarification_candidates": event.get("clarification_candidates"),
                             "memory_action_result": memory_action_result or memory_effect_payload,
                             "memory_suggestion": memory_suggestion,
+                            "_chart_cache": persisted_chart_cache,
                         },
                     )
                     yield f"data: {json.dumps(final_data, ensure_ascii=False)}\n\n"
 
         except Exception as e:
+            if should_log_chart_follow_up_debug:
+                _log_chart_follow_up_debug(
+                    stage="stream_exception",
+                    request_id=request_id,
+                    session_id=session_id,
+                    effective_message=effective_message,
+                    chart_follow_up_base_query=chart_follow_up_base_query,
+                    clarification_required=None,
+                    cache_hit=False,
+                    show_charts=None,
+                )
             _log_exception_event(
                 "chat.stream.error",
                 error=e,
@@ -1920,6 +2884,39 @@ async def chat(request: ChatRequest):
         learned_alias_count=len(learned_aliases),
         session_alias_count=len(alias_memory or {}),
     )
+
+    cached_chart_payload = _build_chart_follow_up_cache_payload(
+        session_id=session_id,
+        effective_message=effective_message,
+        chart_follow_up_base_query=context.get("chart_follow_up_base_query"),
+        alias_memory=alias_memory,
+        learned_aliases=learned_aliases,
+        restore_mode=context.get("chart_follow_up_restore_mode"),
+    )
+    if cached_chart_payload:
+        payload = {
+            "request_id": request_id,
+            "session_id": session_id,
+            "original_question": effective_message,
+            "steps": [{"step": "复用上一轮查询结果", "status": "done", "info": "已基于缓存重建图表", "duration_ms": 0}],
+            "intent_type": "data_query",
+            "memory_action_result": None,
+            "memory_suggestion": None,
+            "total_duration_ms": 0,
+            **cached_chart_payload,
+        }
+        chat_memory_service.record_chat_message(
+            session_id=session_id,
+            user_id=user_id,
+            role="assistant",
+            message=payload.get("response") or "",
+            intent_type="data_query",
+            message_meta={
+                **payload,
+                "_chart_cache": _build_persistable_chart_cache_meta_from_session(session_id),
+            },
+        )
+        return payload
 
     project_scope_action = _extract_alias_action(request.alias_confirmation)
     if isinstance(project_scope_action, dict) and project_scope_action.get("action") == "confirm_project_scope":
@@ -1999,9 +2996,14 @@ async def chat(request: ChatRequest):
         response_text = ""
         query_params = None
         last_sensor_result = None
+        last_chart_cache = None
         projects_list = None
         devices_list = None
         final_analysis = None
+        final_chart_specs = []
+        final_chart_context = None
+        final_show_charts = False
+        final_table_preview = None
         final_table_type = ""
         total_duration_ms = None
         clarification_required = False
@@ -2042,10 +3044,16 @@ async def chat(request: ChatRequest):
                 response_text = event.get("response", "")
                 response_text = re.sub(r"<think>.*?</think>", "", response_text, flags=re.DOTALL).strip()
                 final_analysis = event.get("analysis")
+                final_chart_specs = event.get("chart_specs") if isinstance(event.get("chart_specs"), list) else []
+                final_chart_context = _coerce_chart_context_payload(event.get("chart_context"))
+                final_show_charts = bool(event.get("show_charts", False))
+                final_table_preview = event.get("table_preview")
                 final_table_type = str(event.get("table_type") or final_table_type or "")
                 total_duration_ms = event.get("total_duration_ms")
                 clarification_required = bool(event.get("clarification_required", False))
                 clarification_candidates = event.get("clarification_candidates")
+                if isinstance(event.get("_chart_cache"), dict):
+                    last_chart_cache = dict(event.get("_chart_cache") or {})
                 if event.get("query_params"):
                     query_params = event.get("query_params")
                 if event.get("projects") is not None:
@@ -2058,6 +3066,21 @@ async def chat(request: ChatRequest):
             alias_memory=alias_memory,
             learned_aliases=learned_aliases,
         )
+        normalized_records = _coerce_normalized_chart_cache_records((last_chart_cache or {}).get("normalized_records"))
+        if not normalized_records:
+            normalized_records = InsightEngine._normalize_records(
+                _coerce_chart_cache_raw_data((last_chart_cache or {}).get("raw_data"))
+            )
+        if final_chart_context is None:
+            final_chart_context = _build_chart_context_payload(
+                session_id=session_id,
+                query_params=query_params,
+                resolved_scope=resolved_scope,
+                normalized_records=normalized_records,
+                analysis=final_analysis if isinstance(final_analysis, dict) else None,
+                chart_specs=final_chart_specs,
+                user_query=effective_message,
+            )
 
         if not query_params and last_sensor_result and last_sensor_result.get("query"):
             mongo_query = last_sensor_result["query"]
@@ -2091,6 +3114,16 @@ async def chat(request: ChatRequest):
                 alias_memory=alias_memory,
                 learned_aliases=learned_aliases,
             )
+            if final_chart_context is None:
+                final_chart_context = _build_chart_context_payload(
+                    session_id=session_id,
+                    query_params=query_params,
+                    resolved_scope=resolved_scope,
+                    normalized_records=normalized_records,
+                    analysis=final_analysis if isinstance(final_analysis, dict) else None,
+                    chart_specs=final_chart_specs,
+                    user_query=effective_message,
+                )
 
         table_keywords = ["表格", "下表", "列表", "记录", "结果"]
         if final_table_type in {"projects", "project_stats", "devices"} or any(keyword in response_text for keyword in table_keywords):
@@ -2144,6 +3177,14 @@ async def chat(request: ChatRequest):
             total_duration_ms=total_duration_ms,
             empty_result=response_text == EMPTY_RESULT_MESSAGE,
         )
+        persisted_chart_cache = _build_persistable_chart_cache_meta(
+            base_query=str(context.get("chart_follow_up_base_query") or effective_message or "").strip(),
+            query_params=query_params if isinstance(query_params, dict) else None,
+            raw_data=(last_chart_cache or {}).get("raw_data") if isinstance(last_chart_cache, dict) else None,
+            statistics=(last_chart_cache or {}).get("statistics") if isinstance(last_chart_cache, dict) else None,
+            normalized_records=normalized_records,
+            device_names=_build_device_name_map_from_scope(resolved_scope),
+        )
         chat_memory_service.record_chat_message(
             session_id=session_id,
             user_id=user_id,
@@ -2159,13 +3200,41 @@ async def chat(request: ChatRequest):
                 "projects": projects_list,
                 "devices": devices_list,
                 "analysis": final_analysis,
+                "chart_specs": final_chart_specs,
+                "chart_context": final_chart_context,
+                "table_preview": final_table_preview,
+                "show_charts": final_show_charts,
                 "total_duration_ms": total_duration_ms,
                 "clarification_required": clarification_required,
                 "clarification_candidates": clarification_candidates,
                 "memory_action_result": memory_action_result,
                 "memory_suggestion": memory_suggestion,
+                "_chart_cache": persisted_chart_cache,
             },
         )
+        if isinstance(query_params, dict) and query_params.get("device_codes"):
+            session_state = _get_session_state(session_id)
+            session_state["last_sensor_query_context"] = {
+                "base_query": str(context.get("chart_follow_up_base_query") or effective_message or "").strip(),
+                "query_params": dict(query_params),
+                "analysis_mode": str((final_analysis or {}).get("mode") or "").strip() if isinstance(final_analysis, dict) else "",
+                "table_type": final_table_type,
+                "chart_count": len((last_chart_cache or {}).get("chart_specs") or []) if isinstance(last_chart_cache, dict) else 0,
+                "updated_at": datetime.now().isoformat(),
+            }
+            _store_session_sensor_result_cache(
+                session_id,
+                base_query=str(context.get("chart_follow_up_base_query") or effective_message or "").strip(),
+                query_params=query_params,
+                resolved_scope=resolved_scope,
+                analysis=final_analysis if isinstance(final_analysis, dict) else None,
+                table_type=final_table_type,
+                chart_specs=final_chart_specs,
+                statistics=(last_chart_cache or {}).get("statistics") if isinstance(last_chart_cache, dict) else None,
+                raw_data=(last_chart_cache or {}).get("raw_data") if isinstance(last_chart_cache, dict) else None,
+                normalized_records=normalized_records,
+                chart_context=final_chart_context,
+            )
         return {
             "success": True,
             "response": response_text,
@@ -2176,6 +3245,11 @@ async def chat(request: ChatRequest):
             "resolved_scope": resolved_scope,
             "projects": projects_list,
             "devices": devices_list,
+            "analysis": final_analysis,
+            "chart_specs": final_chart_specs,
+            "chart_context": final_chart_context,
+            "table_preview": final_table_preview,
+            "show_charts": final_show_charts,
             "total_duration_ms": total_duration_ms,
             "clarification_required": clarification_required,
             "clarification_candidates": clarification_candidates,
@@ -2312,6 +3386,7 @@ async def query_data(request: DataQueryRequest):
             "analysis": result.get("analysis"),
             "focused_table": result.get("focused_table"),
             "chart_specs": result.get("chart_specs"),
+            "chart_context": result.get("chart_context"),
             "show_charts": result.get("show_charts", False),
             "is_sampled": result.get("is_sampled", False),
             "is_aggregated": is_aggregated,
@@ -2341,6 +3416,7 @@ async def query_data(request: DataQueryRequest):
                 statistics=result.get("statistics"),
                 analysis=result.get("analysis"),
                 chart_specs=result.get("chart_specs"),
+                chart_context=result.get("chart_context"),
                 show_charts=result.get("show_charts", False),
                 is_sampled=result.get("is_sampled", False),
                 is_aggregated=is_aggregated,

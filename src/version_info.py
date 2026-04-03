@@ -4,15 +4,29 @@ from copy import deepcopy
 from typing import Any, Dict, List
 
 
-APP_VERSION = "0.2.0"
-RELEASE_DATE = "2026-04-01"
-RELEASE_NAME = "Hybrid Resolution & User Memory"
+APP_VERSION = "0.3.0"
+RELEASE_DATE = "2026-04-03"
+RELEASE_NAME = "Chart Follow-up MVP & UI Cleanup"
 
 CHANGELOG_ENTRIES: List[Dict[str, Any]] = [
     {
         "version": APP_VERSION,
         "release_date": RELEASE_DATE,
         "title": RELEASE_NAME,
+        "summary": "完成图表续问 MVP、历史缓存恢复、首页测试题库分组，以及前端快捷查询下线与历史对话清理能力。",
+        "highlights": [
+            "新增图表规划器 + 注册表 + line/bar/scatter/boxplot/heatmap 五种 ECharts builder 主路径。",
+            "补齐“帮我画图/切换图种”续问链路，支持 session 缓存与聊天历史恢复后继续出图。",
+            "首页右侧改为分类测试题库，便于按基础、对比、趋势、图表等场景一键回归。",
+            "移除前端快捷查询面板与独立结果区，统一回到聊天式查询入口，减少重复交互。",
+            "新增清空历史对话接口与前端按钮，可一键清理当前用户聊天记录而不影响常用叫法记忆。",
+            "补充缓存恢复、历史续图与接口回归测试，修复 SSE 追问场景的稳定性问题。",
+        ],
+    },
+    {
+        "version": "0.2.0",
+        "release_date": "2026-04-01",
+        "title": "Hybrid Resolution & User Memory",
         "summary": "设备混合解析、聊天式长期记忆、前端诊断信息与作用域性能保护完成一轮产品化整合。",
         "highlights": [
             "新增词法优先、语义补充的混合设备解析主路径，并统一推荐后确认交互。",

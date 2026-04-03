@@ -13,13 +13,15 @@ DAG Orchestrator - 基于 LangGraph 的 DAG 状态机编排器
 5. Synthesizer - LLM 总结呈现
 """
 
-from typing import Dict, Optional, Any, Generator, TYPE_CHECKING
+from typing import Dict, Optional, Any, Generator, TYPE_CHECKING, List, Tuple
 import logging
+import re
 import time
 
 from langchain_core.language_models import BaseChatModel
 from langgraph.graph import StateGraph, START, END
 
+from src.analysis.insight_engine import InsightEngine
 from src.metadata.metadata_engine import MetadataEngine
 from src.fetcher.data_fetcher import DataFetcher
 from src.cache.cache_manager import CacheManager
@@ -39,6 +41,7 @@ from src.agent.types import (
 from src.agent.query_entities import extract_current_question_text
 from src.agent.query_plan_state import (
     get_data_type_from_state,
+    get_comparison_targets_from_state,
     get_explicit_device_codes_from_state,
     get_query_mode_from_state,
     get_time_range_from_state,
@@ -51,6 +54,31 @@ from src.agent.query_plan_state import (
 
 
 logger = logging.getLogger(__name__)
+
+CHART_INTENT_KEYWORDS = (
+    "图",
+    "图表",
+    "画图",
+    "画一下",
+    "画一张图",
+    "画张图",
+    "帮我画",
+    "可视化",
+    "趋势图",
+    "对比图",
+    "折线图",
+    "柱状图",
+    "散点图",
+    "雷达图",
+    "箱线图",
+    "热力图",
+    "曲线图",
+    "chart",
+    "plot",
+    "echart",
+    "echarts",
+    "matplotlib",
+)
 
 
 # Re-export types for backward compatibility
@@ -121,6 +149,63 @@ def route_after_metadata(state: GraphState) -> str:
     return "continue"
 
 
+def _has_chart_intent_from_query(user_query: str) -> bool:
+    text = str(user_query or "").strip().lower()
+    if not text:
+        return False
+    if any(keyword in text for keyword in CHART_INTENT_KEYWORDS):
+        return True
+    explicit_patterns = (
+        r"(画|生成|绘制|做|出).{0,4}(图|图表)",
+        r"(可视化|趋势图|对比图|折线图|柱状图|散点图|雷达图|箱线图|热力图)",
+    )
+    return any(re.search(pattern, text) for pattern in explicit_patterns)
+
+
+def _resolve_insight_question(state: GraphState) -> str:
+    query_plan = state.get("query_plan") if isinstance(state.get("query_plan"), dict) else None
+    plan_question = str((query_plan or {}).get("current_question") or "").strip()
+    original_question = extract_current_question_text(str(state.get("user_query") or ""))
+    if _has_chart_intent_from_query(original_question) and not _has_chart_intent_from_query(plan_question):
+        return original_question
+    return plan_question or original_question
+
+
+def _build_inline_insight_from_state(state: GraphState) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], bool, Optional[Dict[str, Any]]]:
+    raw_data = state.get("raw_data") or []
+    if not isinstance(raw_data, list) or not raw_data:
+        return None, [], False, None
+
+    current_question = _resolve_insight_question(state)
+
+    device_codes = [str(code).strip() for code in (state.get("device_codes") or []) if str(code).strip()]
+    device_names = state.get("device_names") if isinstance(state.get("device_names"), dict) else None
+    data_type = get_data_type_from_state(state, default="ep")
+    comparison_scope_groups = state.get("comparison_scope_groups") if isinstance(state.get("comparison_scope_groups"), dict) else None
+    comparison_slots = InsightEngine.build_comparison_slots(
+        comparison_targets=get_comparison_targets_from_state(state),
+        comparison_scope_groups=comparison_scope_groups,
+        device_names=device_names,
+    )
+    analysis, chart_specs = InsightEngine.build(
+        raw_data,
+        state.get("statistics"),
+        data_type=data_type,
+        device_codes=device_codes,
+        device_names=device_names,
+        user_query=current_question,
+        comparison_slots=comparison_slots,
+    )
+    chart_context = InsightEngine.build_chart_context(
+        normalized_records=InsightEngine._normalize_records(raw_data),
+        analysis=analysis,
+        chart_specs=chart_specs,
+        user_query=current_question,
+        comparison_slots=comparison_slots,
+    ) if isinstance(analysis, dict) else None
+    return analysis, chart_specs, _has_chart_intent_from_query(current_question), chart_context
+
+
 def _build_table_preview_from_state(state: GraphState) -> Optional[Dict[str, Any]]:
     raw_data = state.get("raw_data") or []
     if not isinstance(raw_data, list) or not raw_data:
@@ -153,6 +238,7 @@ def _build_table_preview_from_state(state: GraphState) -> Optional[Dict[str, Any
         focused_table = focused_result.get("table")
 
     total_count = int(state.get("total_count") or len(raw_data) or len(rows))
+    analysis, chart_specs, show_charts, chart_context = _build_inline_insight_from_state(state)
     return {
         "success": True,
         "data": rows,
@@ -163,6 +249,10 @@ def _build_table_preview_from_state(state: GraphState) -> Optional[Dict[str, Any
         "has_more": total_count > len(rows),
         "statistics": state.get("statistics"),
         "focused_table": focused_table,
+        "analysis": analysis,
+        "chart_specs": chart_specs,
+        "chart_context": chart_context,
+        "show_charts": show_charts,
     }
 
 def _build_frontend_query_params_from_state(state: GraphState) -> Optional[Dict[str, Any]]:
@@ -660,6 +750,7 @@ class DAGOrchestrator:
             # 发送最终响应
             query_info = current_state.get("query_info")
             frontend_query_params = _build_frontend_query_params_from_state(current_state)
+            analysis, chart_specs, show_charts, chart_context = _build_inline_insight_from_state(current_state)
             final_event = {
                 "type": "final_answer",
                 "response": current_state.get("final_response", "Query completed."),
@@ -667,9 +758,21 @@ class DAGOrchestrator:
                 "table_type": current_state.get("table_type"),
                 "query_params": frontend_query_params,
                 "query_plan": current_state.get("query_plan"),
+                "analysis": analysis,
+                "chart_specs": chart_specs,
+                "chart_context": chart_context,
+                "show_charts": show_charts,
                 "clarification_required": bool(current_state.get("clarification_required", False)),
                 "clarification_candidates": current_state.get("clarification_candidates"),
                 "table_preview": _build_table_preview_from_state(current_state),
+                "_chart_cache": {
+                    "raw_data": list(current_state.get("raw_data") or []),
+                    "normalized_records": InsightEngine._normalize_records(list(current_state.get("raw_data") or [])),
+                    "statistics": current_state.get("statistics"),
+                    "device_names": current_state.get("device_names"),
+                    "chart_specs": chart_specs,
+                    "chart_context": chart_context,
+                } if current_state.get("raw_data") else None,
                 "total_duration_ms": round((time.perf_counter() - run_start_time) * 1000, 2)
             }
             if isinstance(query_info, dict):

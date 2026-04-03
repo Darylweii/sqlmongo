@@ -28,6 +28,8 @@ def _load_module(name: str, relative_path: str):
 def _load_agent_modules():
     prefixes = (
         "src.agent",
+        "src.analysis",
+        "src.charts",
         "src.metadata",
         "src.router",
         "src.semantic_layer",
@@ -46,6 +48,9 @@ def _load_agent_modules():
         "src.agent",
         "src.agent.nodes",
         "src.agent.utils",
+        "src.analysis",
+        "src.charts",
+        "src.charts.builders",
         "src.metadata",
         "src.router",
         "src.semantic_layer",
@@ -294,6 +299,17 @@ def _load_agent_modules():
     _load_module("src.agent.query_planner", "src/agent/query_planner.py")
     _load_module("src.agent.types", "src/agent/types.py")
     _load_module("src.agent.focused_response", "src/agent/focused_response.py")
+    _load_module("src.charts.chart_types", "src/charts/chart_types.py")
+    _load_module("src.charts.chart_planner", "src/charts/chart_planner.py")
+    _load_module("src.charts.builders.common", "src/charts/builders/common.py")
+    _load_module("src.charts.builders.line_chart", "src/charts/builders/line_chart.py")
+    _load_module("src.charts.builders.bar_chart", "src/charts/builders/bar_chart.py")
+    _load_module("src.charts.builders.scatter_chart", "src/charts/builders/scatter_chart.py")
+    _load_module("src.charts.builders.boxplot_chart", "src/charts/builders/boxplot_chart.py")
+    _load_module("src.charts.builders.heatmap_chart", "src/charts/builders/heatmap_chart.py")
+    _load_module("src.charts.builders", "src/charts/builders/__init__.py")
+    _load_module("src.charts.chart_registry", "src/charts/chart_registry.py")
+    _load_module("src.analysis.insight_engine", "src/analysis/insight_engine.py")
     metadata_mapper = _load_module("src.agent.nodes.metadata_mapper", "src/agent/nodes/metadata_mapper.py")
     semantic_metadata_mapper = _load_module("src.agent.nodes.semantic_metadata_mapper", "src/agent/nodes/semantic_metadata_mapper.py")
     sharding_router = _load_module("src.agent.nodes.sharding_router", "src/agent/nodes/sharding_router.py")
@@ -315,6 +331,8 @@ def _load_agent_modules():
         "IntentParserNode": intent_parser.IntentParserNode,
         "ActionOverridePolicyNode": action_override_policy_node.ActionOverridePolicyNode,
         "DAGOrchestrator": dag_orchestrator.DAGOrchestrator,
+        "_build_inline_insight_from_state": dag_orchestrator._build_inline_insight_from_state,
+        "_resolve_insight_question": dag_orchestrator._resolve_insight_question,
         "route_after_query_plan": dag_orchestrator.route_after_query_plan,
         "route_after_action_override": dag_orchestrator.route_after_action_override,
         "route_after_metadata": dag_orchestrator.route_after_metadata,
@@ -449,6 +467,46 @@ def test_route_after_metadata_short_circuits_device_listing() -> None:
     )
 
     assert next_step == "terminal"
+
+
+def test_inline_insight_prefers_original_chart_follow_up_question() -> None:
+    modules = _load_agent_modules()
+    resolve_question = modules["_resolve_insight_question"]
+    build_inline_insight = modules["_build_inline_insight_from_state"]
+
+    state = {
+        "user_query": "对话历史:\n用户: 比较 a1_b9、b1_b14、a2_b3 三个设备的用电情况\n\n当前问题: 帮我画柱状对比图",
+        "query_plan": {
+            "current_question": "比较 a1_b9、b1_b14、a2_b3 三个设备的用电情况",
+        },
+        "raw_data": [
+            {"logTime": "2026-04-01 00:00:00", "device": "a1_b9", "tag": "ep", "val": 100},
+            {"logTime": "2026-04-01 01:00:00", "device": "a1_b9", "tag": "ep", "val": 110},
+            {"logTime": "2026-04-01 00:00:00", "device": "b1_b14", "tag": "ep", "val": 30},
+            {"logTime": "2026-04-01 01:00:00", "device": "b1_b14", "tag": "ep", "val": 35},
+            {"logTime": "2026-04-01 00:00:00", "device": "a2_b3", "tag": "ep", "val": 90},
+            {"logTime": "2026-04-01 01:00:00", "device": "a2_b3", "tag": "ep", "val": 92},
+        ],
+        "statistics": {"avg": 76.17, "count": 6, "trend": "平稳", "change_rate": 0.0, "cv": 0.2, "anomaly_count": 0, "anomaly_ratio": 0.0},
+        "device_codes": ["a1_b9", "b1_b14", "a2_b3"],
+        "device_names": {"a1_b9": "设备1", "b1_b14": "设备2", "a2_b3": "设备3"},
+        "comparison_scope_groups": {
+            "a1_b9": [{"device": "a1_b9", "name": "设备1", "project_name": "项目A", "tg": "TG232"}],
+            "b1_b14": [{"device": "b1_b14", "name": "设备2", "project_name": "项目A", "tg": "TG233"}],
+            "a2_b3": [{"device": "a2_b3", "name": "设备3", "project_name": "项目A", "tg": "TG232"}],
+        },
+        "query_mode": "comparison",
+        "data_type": "ep",
+    }
+
+    assert resolve_question(state) == "帮我画柱状对比图"
+    analysis, chart_specs, show_charts, chart_context = build_inline_insight(state)
+
+    assert analysis is not None
+    assert show_charts is True
+    assert chart_context is not None
+    assert chart_specs
+    assert chart_specs[0]["chart_type"] == "bar"
 
 
 def test_route_after_metadata_short_circuits_clarification() -> None:
@@ -754,8 +812,8 @@ def test_synthesizer_prefers_query_plan_comparison_targets() -> None:
 
 
 class FakeSensorFetchResult:
-    def __init__(self, *, total_count=0, statistics=None, query_info=None, failed_collections=None, is_sampled=False):
-        self.data = []
+    def __init__(self, *, data=None, total_count=0, statistics=None, query_info=None, failed_collections=None, is_sampled=False):
+        self.data = list(data or [])
         self.total_count = total_count
         self.statistics = statistics
         self.query_info = query_info
@@ -810,6 +868,63 @@ def test_parallel_fetcher_prefers_query_plan_time_range_and_context() -> None:
     assert result["query_info"]["query_plan_context"]["data_type"] == "u_line"
     assert result["query_info"]["query_plan_context"]["time_start"] == "2024-01-01"
     assert result["query_info"]["query_plan_context"]["time_end"] == "2024-01-31"
+
+
+def test_parallel_fetcher_comparison_keeps_raw_data_for_inline_charts() -> None:
+    modules = _load_agent_modules()
+
+    class ComparisonFetcher:
+        def __init__(self):
+            self.calls = []
+
+        def fetch_sync(self, **kwargs):
+            self.calls.append(kwargs)
+            device = (kwargs.get("devices") or [""])[0]
+            tg = (kwargs.get("tgs") or [""])[0]
+            rows = [
+                {"logTime": "2026-04-01 00:00:00", "device": device, "tag": "ep", "val": 100 if device == "a1_b9" else 80, "tg": tg},
+                {"logTime": "2026-04-01 01:00:00", "device": device, "tag": "ep", "val": 110 if device == "a1_b9" else 90, "tg": tg},
+            ]
+            return FakeSensorFetchResult(
+                data=rows,
+                total_count=len(rows),
+                statistics={"avg": 105 if device == "a1_b9" else 85},
+                query_info={"type": "MongoDB"},
+            )
+
+    fetcher = ComparisonFetcher()
+    node = modules["ParallelFetcherNode"](fetcher)
+
+    result = node({
+        "query_plan": {
+            "query_mode": "comparison",
+            "search_targets": ["a1_b9", "b1_b14"],
+            "inferred_data_type": "ep",
+            "time_start": "2026-04-01",
+            "time_end": "2026-04-01",
+            "response_style": "compare",
+            "aggregation": "compare",
+            "has_sensor_intent": True,
+            "has_comparison_intent": True,
+            "confidence": 0.9,
+        },
+        "device_codes": ["a1_b9", "b1_b14"],
+        "collections": ["prefix_ep_2026-04-01_2026-04-01_12"],
+        "data_tags": ["tag_for_prefix_ep"],
+        "comparison_device_groups": {"a1_b9": ["a1_b9"], "b1_b14": ["b1_b14"]},
+        "comparison_scope_groups": {
+            "a1_b9": [{"device": "a1_b9", "name": "设备1", "project_name": "项目A", "tg": "TG232"}],
+            "b1_b14": [{"device": "b1_b14", "name": "设备2", "project_name": "项目A", "tg": "TG233"}],
+        },
+        "history": [],
+    })
+
+    assert len(fetcher.calls) == 2
+    assert result["total_count"] == 4
+    assert len(result["raw_data"]) == 4
+    assert result["raw_data"][0]["device"] == "a1_b9"
+    assert result["comparison_statistics"]["a1_b9"]["count"] == 2
+    assert result["comparison_statistics"]["b1_b14"]["count"] == 2
 
 
 def test_action_override_policy_node_short_circuits_project_listing() -> None:

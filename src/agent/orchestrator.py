@@ -66,6 +66,14 @@ MAX_ITERATIONS = 5
 CLARIFICATION_CANDIDATE_LIMIT = 50
 EMPTY_RESULT_MESSAGE = "当前时间范围内未查询到符合条件的数据，请尝试放宽时间范围、检查设备代号或调整过滤条件。"
 
+CHART_TYPE_LABELS = {
+    "line": "折线图",
+    "bar": "柱状图",
+    "scatter": "散点图",
+    "boxplot": "箱线图",
+    "heatmap": "热力图",
+}
+
 
 class AgentState(TypedDict):
     """Agent 状态"""
@@ -1098,6 +1106,12 @@ class LLMAgent:
             if not result.get("success"):
                 final_event["response"] = str(result.get("error") or EMPTY_RESULT_MESSAGE)
                 return final_event
+            raw_data = result.get("data")
+            if isinstance(raw_data, str):
+                try:
+                    raw_data = json.loads(raw_data)
+                except json.JSONDecodeError:
+                    raw_data = None
             final_event.update(
                 {
                     "response": self._build_sensor_response_by_style(plan, result),
@@ -1107,6 +1121,11 @@ class LLMAgent:
                     "chart_specs": result.get("chart_specs"),
                     "show_charts": result.get("show_charts", False),
                     "table_preview": self._build_sensor_table_preview(result),
+                    "_chart_cache": {
+                        "raw_data": raw_data if isinstance(raw_data, list) else None,
+                        "statistics": result.get("statistics"),
+                        "chart_specs": result.get("chart_specs"),
+                    } if raw_data else None,
                 }
             )
             return final_event
@@ -1768,7 +1787,11 @@ class LLMAgent:
         normalized_keywords = self._dedupe_keywords(keywords)
         query_state = self._build_query_state_snapshot(user_query)
         parsed_targets = self._dedupe_keywords(get_state_targets(query_state))
-        comparison_targets = self._dedupe_keywords(get_comparison_targets_from_state(query_state))
+        comparison_targets = [
+            self._normalize_search_keyword(keyword)
+            for keyword in get_comparison_targets_from_state(query_state)
+            if self._normalize_search_keyword(keyword)
+        ]
 
         if comparison_mode and comparison_targets:
             return comparison_targets
@@ -2505,13 +2528,12 @@ class LLMAgent:
     def _build_chart_follow_up(self, analysis: Dict[str, Any], chart_specs: List[Dict[str, Any]], show_charts: bool) -> str:
         if not chart_specs:
             return ""
+        first_chart = chart_specs[0] if isinstance(chart_specs, list) and chart_specs else {}
+        chart_type = str(first_chart.get("chart_type") or "").strip().lower()
+        chart_label = CHART_TYPE_LABELS.get(chart_type) or str(first_chart.get("title") or "").strip() or ("对比图" if analysis.get("mode") == "comparison" else "趋势图")
         if show_charts:
-            if analysis.get("mode") == "comparison":
-                return "- 已按你的要求准备了对比图，可结合下方图表继续查看。"
-            return "- 已按你的要求准备了趋势图，可结合下方图表继续查看。"
-        if analysis.get("mode") == "comparison":
-            return "- 如果你需要，我可以继续帮你画一份对比图。"
-        return "- 如果你需要，我可以继续帮你画一份趋势图。"
+            return f"- 已按你的要求准备了{chart_label}，可结合下方图表继续查看。"
+        return f"- 如果你需要，我可以继续帮你画一份{chart_label}。"
 
     def _format_structured_analysis_response(self, result: Dict[str, Any], fallback_answer: str = "") -> str:
         analysis = result.get("analysis") or {}

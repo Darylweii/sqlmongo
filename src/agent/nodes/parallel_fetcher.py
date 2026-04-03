@@ -215,6 +215,7 @@ class ParallelFetcherNode:
         history: list,
     ) -> GraphState:
         comparison_statistics: Dict[str, Dict[str, Any]] = {}
+        comparison_raw_data: List[Dict[str, Any]] = []
         total_count = 0
         target_query_infos: Dict[str, Dict[str, Any]] = {}
         filter_info = state.get("filter_info") or {}
@@ -256,7 +257,7 @@ class ParallelFetcherNode:
                     query_info["statistics"] = dict(stats)
                 query_info["device_codes"] = list(scoped_devices)
                 query_info["tg_values"] = list(scoped_tgs)
-                return target, stats, query_info, int(result.total_count or 0)
+                return target, stats, query_info, int(result.total_count or 0), list(result.data or [])
             except Exception as exc:
                 logger.warning("parallel_fetcher.comparison_target_failed target=%s error=%s", target, exc)
                 return target, {"error": str(exc), "count": 0, "devices": list(scoped_devices), "tgs": list(scoped_tgs)}, {
@@ -265,7 +266,7 @@ class ParallelFetcherNode:
                     "device_codes": list(scoped_devices),
                     "tg_values": list(scoped_tgs),
                     "query_plan_context": build_query_plan_context(state),
-                }, 0
+                }, 0, []
 
         async def fetch_all_targets():
             tasks = [
@@ -294,22 +295,25 @@ class ParallelFetcherNode:
             if isinstance(result, Exception):
                 logger.error("parallel_fetcher.comparison_batch_failed error=%s", result)
                 continue
-            target, stats, query_info, count = result
+            target, stats, query_info, count, records = result
             comparison_statistics[target] = stats
             target_query_infos[target] = query_info
             total_count += count
+            if records:
+                comparison_raw_data.extend([item for item in records if isinstance(item, dict)])
 
         result_summary = f"对比统计 {len(comparison_device_groups)} 个目标，共 {total_count} 条数据"
         logger.info(
-            "parallel_fetcher.comparison_ok targets=%s total=%s filter_strategy=%s",
+            "parallel_fetcher.comparison_ok targets=%s total=%s raw_records=%s filter_strategy=%s",
             len(comparison_device_groups),
             total_count,
+            len(comparison_raw_data),
             filter_info.get("strategy", "none"),
         )
 
         return {
             **state,
-            "raw_data": [],
+            "raw_data": comparison_raw_data,
             "total_count": total_count,
             "statistics": None,
             "comparison_statistics": comparison_statistics,

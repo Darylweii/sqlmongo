@@ -663,17 +663,30 @@ class MetadataMapperNode:
         comparison_device_groups = {}
         comparison_scope_groups = {}
         resolved_rows = []
+        resolved_target_cache = {}
         project_hints = get_project_hints_from_state(state)
         query_text = str(getattr(state.get("query_plan"), "current_question", None) or state.get("query") or "")
 
         for target in targets:
-            device_rows, decision_mode = self._resolve_rows_for_target(state, target, project_hints)
+            target_key = str(target or "").strip().lower()
+            cached_result = resolved_target_cache.get(target_key)
+            if cached_result is None:
+                device_rows, decision_mode = self._resolve_rows_for_target(state, target, project_hints)
+                cached_result = (device_rows, decision_mode)
+                resolved_target_cache[target_key] = cached_result
+            else:
+                device_rows, decision_mode = cached_result
             if not device_rows:
                 continue
 
             if self._is_explicit_device_code(target):
                 allow_multi_scope_aggregation = allows_explicit_multi_scope_aggregation(query_text, target)
-                device_rows, clarification = self._resolve_exact_code_candidates(target, device_rows, project_hints)
+                exact_cache_key = f"{target_key}::exact"
+                exact_cached_result = resolved_target_cache.get(exact_cache_key)
+                if exact_cached_result is None:
+                    exact_cached_result = self._resolve_exact_code_candidates(target, device_rows, project_hints)
+                    resolved_target_cache[exact_cache_key] = exact_cached_result
+                device_rows, clarification = exact_cached_result
                 if clarification and not allow_multi_scope_aggregation:
                     return {
                         **state,

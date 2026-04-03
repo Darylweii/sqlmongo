@@ -532,3 +532,611 @@ def test_chat_stream_complete_event_includes_table_preview(monkeypatch) -> None:
     assert complete_event["table_preview"] is not None
     assert complete_event["table_preview"]["data"][0]["tag"] == "ua"
     assert complete_event["table_preview"]["focused_table"]["view_label"] == "问题直答"
+
+
+def test_chat_stream_persists_last_sensor_query_context_for_chart_follow_up(monkeypatch) -> None:
+    app_module = _load_app_module()
+    scripted_events = [
+        {
+            "type": "final_answer",
+            "response": "已返回结果",
+            "show_table": True,
+            "table_type": "sensor_data",
+            "query_params": {
+                "device_codes": ["a1_b9"],
+                "start_time": "2026-04-02",
+                "end_time": "2026-04-02",
+                "data_type": "i",
+                "user_query": "查询 a1_b9 设备今天的电流数据",
+            },
+            "analysis": {"mode": "single", "analysis_scope_label": "a1_b9"},
+            "chart_specs": [{"id": "trend-line"}],
+            "chart_context": {
+                "chartable": True,
+                "query_kind": "single_series",
+                "recommended_chart_type": "line",
+                "follow_up_suggestions": [{"label": "趋势图", "chart_type": "line"}],
+            },
+            "show_charts": False,
+            "table_preview": None,
+            "_chart_cache": {
+                "raw_data": [
+                    {"logTime": "2026-04-02 00:00:00", "device": "a1_b9", "tag": "ia", "val": 3.2},
+                    {"logTime": "2026-04-02 01:00:00", "device": "a1_b9", "tag": "ia", "val": 5.8},
+                ],
+                "statistics": {"avg": 4.5, "count": 2, "trend": "平稳", "change_rate": 0.0, "cv": 0.2, "anomaly_count": 0, "anomaly_ratio": 0.0},
+                "chart_specs": [{"id": "trend-line"}],
+            },
+            "total_duration_ms": 12,
+            "clarification_required": False,
+            "clarification_candidates": None,
+        },
+    ]
+
+    class FakeAgent:
+        def run_with_progress(self, _message_with_history):
+            yield from scripted_events
+
+    monkeypatch.setattr(app_module, "_create_chat_agent", lambda **_kwargs: FakeAgent())
+
+    with TestClient(app_module.app) as client:
+        response = client.post(
+            "/api/chat/stream",
+            json={"message": "查询 a1_b9 设备今天的电流数据", "history": [], "session_id": "chart-session-1"},
+        )
+
+    assert response.status_code == 200
+    state = app_module._get_session_state("chart-session-1")
+    assert state["last_sensor_query_context"]["base_query"] == "查询 a1_b9 设备今天的电流数据"
+    assert state["last_sensor_query_context"]["analysis_mode"] == "single"
+    assert state["last_sensor_query_context"]["chart_count"] == 1
+    assert state["last_sensor_result_cache"]["chart_context"]["recommended_chart_type"] == "line"
+
+
+def test_chat_stream_chart_follow_up_reuses_session_sensor_cache_without_requery(monkeypatch) -> None:
+    app_module = _load_app_module()
+    call_count = {"value": 0}
+    scripted_events = [
+        {
+            "type": "final_answer",
+            "response": "已返回结果",
+            "show_table": True,
+            "table_type": "sensor_data",
+            "query_params": {
+                "device_codes": ["a1_b9"],
+                "tg_values": ["TG232"],
+                "start_time": "2026-04-02",
+                "end_time": "2026-04-02",
+                "data_type": "u_line",
+                "user_query": "查询 a1_b9 设备今天的电压数据",
+            },
+            "analysis": {"mode": "single", "metric": "电压", "unit": "V", "analysis_scope_label": "按三相联合分析"},
+            "chart_specs": [{"id": "trend-line", "chart_type": "line"}],
+            "chart_context": {
+                "chartable": True,
+                "query_kind": "single_series",
+                "recommended_chart_type": "line",
+                "follow_up_suggestions": [{"label": "趋势图", "chart_type": "line"}],
+            },
+            "show_charts": False,
+            "table_preview": None,
+            "_chart_cache": {
+                "raw_data": [
+                    {"logTime": "2026-04-02 00:00:00", "device": "a1_b9", "tag": "ua", "val": 233},
+                    {"logTime": "2026-04-02 00:00:00", "device": "a1_b9", "tag": "ub", "val": 234},
+                    {"logTime": "2026-04-02 00:00:00", "device": "a1_b9", "tag": "uc", "val": 232},
+                    {"logTime": "2026-04-02 01:00:00", "device": "a1_b9", "tag": "ua", "val": 231},
+                    {"logTime": "2026-04-02 01:00:00", "device": "a1_b9", "tag": "ub", "val": 232},
+                    {"logTime": "2026-04-02 01:00:00", "device": "a1_b9", "tag": "uc", "val": 230},
+                ],
+                "statistics": {"avg": 232.0, "count": 6, "trend": "平稳", "change_rate": -0.5, "cv": 0.8, "anomaly_count": 0, "anomaly_ratio": 0.0},
+                "chart_specs": [{"id": "trend-line", "chart_type": "line"}],
+            },
+            "total_duration_ms": 12,
+            "clarification_required": False,
+            "clarification_candidates": None,
+        },
+    ]
+
+    def fake_factory(**_kwargs):
+        call_count["value"] += 1
+        if call_count["value"] > 1:
+            raise AssertionError("chart follow-up should reuse session cache instead of requerying agent")
+
+        class FakeAgent:
+            def run_with_progress(self, _message_with_history):
+                yield from scripted_events
+
+        return FakeAgent()
+
+    monkeypatch.setattr(app_module, "_create_chat_agent", fake_factory)
+
+    with TestClient(app_module.app) as client:
+        first_response = client.post(
+            "/api/chat/stream",
+            json={"message": "查询 a1_b9 设备今天的电压数据", "history": [], "session_id": "chart-cache-session"},
+        )
+        second_response = client.post(
+            "/api/chat/stream",
+            json={"message": "画一张热力图", "history": [], "session_id": "chart-cache-session"},
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    second_events = _parse_sse_events(second_response.text)
+    complete_event = second_events[-1]
+    assert call_count["value"] == 1
+    assert complete_event["type"] == "complete"
+    assert complete_event["show_charts"] is True
+    assert complete_event["chart_specs"][0]["chart_type"] == "heatmap"
+    assert complete_event["chart_context"]["cache_hit"] is True
+    assert "无需重新查询数据库" in complete_event["response"]
+
+
+def test_chat_stream_comparison_chart_context_preserves_duplicate_slots(monkeypatch) -> None:
+    app_module = _load_app_module()
+    scripted_events = [
+        {
+            "type": "final_answer",
+            "response": "已完成四项对比",
+            "show_table": True,
+            "table_type": "sensor_data",
+            "query_params": {
+                "device_codes": ["a1_b9", "a2_b1", "a3_b2"],
+                "start_time": "2026-04-02",
+                "end_time": "2026-04-02",
+                "data_type": "u_line",
+                "user_query": "对比一下 a1_b9 和 a2_b1 和 a3_b2 以及 a3_b2 的电压数据",
+                "query_plan": {
+                    "comparison_targets": ["a1_b9", "a2_b1", "a3_b2", "a3_b2"],
+                    "search_targets": ["a1_b9", "a2_b1", "a3_b2", "a3_b2"],
+                },
+                "comparison_scope_groups": {
+                    "a1_b9": [{"device": "a1_b9", "name": "设备1", "project_name": "项目A", "tg": "TG1"}],
+                    "a2_b1": [{"device": "a2_b1", "name": "设备2", "project_name": "项目B", "tg": "TG2"}],
+                    "a3_b2": [{"device": "a3_b2", "name": "设备3", "project_name": "项目C", "tg": "TG3"}],
+                },
+            },
+            "analysis": {"mode": "comparison"},
+            "chart_specs": [{"id": "trend-line", "chart_type": "line"}],
+            "show_charts": False,
+            "table_preview": None,
+            "_chart_cache": {
+                "raw_data": [
+                    {"logTime": "2026-04-02 00:00:00", "device": "a1_b9", "tag": "ua", "val": 233, "tg": "TG1"},
+                    {"logTime": "2026-04-02 00:00:00", "device": "a2_b1", "tag": "ua", "val": 231, "tg": "TG2"},
+                    {"logTime": "2026-04-02 00:00:00", "device": "a3_b2", "tag": "ua", "val": 229, "tg": "TG3"},
+                ],
+                "statistics": {"avg": 231.0, "count": 3, "trend": "平稳", "change_rate": 0.0, "cv": 0.5, "anomaly_count": 0, "anomaly_ratio": 0.0},
+                "chart_specs": [{"id": "trend-line", "chart_type": "line"}],
+            },
+            "total_duration_ms": 18,
+            "clarification_required": False,
+            "clarification_candidates": None,
+        },
+    ]
+
+    class FakeAgent:
+        def run_with_progress(self, _message_with_history):
+            yield from scripted_events
+
+    monkeypatch.setattr(app_module, "_create_chat_agent", lambda **_kwargs: FakeAgent())
+
+    with TestClient(app_module.app) as client:
+        response = client.post(
+            "/api/chat/stream",
+            json={"message": "对比一下 a1_b9 和 a2_b1 和 a3_b2 以及 a3_b2 的电压数据", "history": [], "session_id": "comparison-slot-session"},
+        )
+
+    complete_event = _parse_sse_events(response.text)[-1]
+    assert complete_event["chart_context"]["comparison_slot_count"] == 4
+    assert [slot["raw_target"] for slot in complete_event["chart_context"]["comparison_slots"]] == ["a1_b9", "a2_b1", "a3_b2", "a3_b2"]
+
+
+def test_chat_stream_button_follow_up_uses_explicit_base_query_cache(monkeypatch) -> None:
+    app_module = _load_app_module()
+    call_count = {"value": 0}
+    scripted_events = [
+        {
+            "type": "final_answer",
+            "response": "已完成对比",
+            "show_table": True,
+            "table_type": "sensor_data",
+            "query_params": {
+                "device_codes": ["a1_b9", "b1_b14", "a2_b3"],
+                "tg_values": ["TG232", "TG233"],
+                "start_time": "2026-04-01",
+                "end_time": "2026-04-03",
+                "data_type": "ep",
+                "user_query": "对比一下 a1_b9 和 b1_b14 和 a2_b3 的用电量数据",
+                "query_plan": {
+                    "comparison_targets": ["a1_b9", "b1_b14", "a2_b3"],
+                    "search_targets": ["a1_b9", "b1_b14", "a2_b3"],
+                },
+                "comparison_scope_groups": {
+                    "a1_b9": [{"device": "a1_b9", "name": "设备1", "project_name": "项目A", "tg": "TG232"}],
+                    "b1_b14": [{"device": "b1_b14", "name": "设备2", "project_name": "项目A", "tg": "TG233"}],
+                    "a2_b3": [{"device": "a2_b3", "name": "设备3", "project_name": "项目A", "tg": "TG232"}],
+                },
+            },
+            "analysis": {"mode": "comparison", "metric": "用电量", "unit": "kWh"},
+            "chart_specs": [{"id": "trend-line", "chart_type": "line"}],
+            "show_charts": False,
+            "table_preview": None,
+            "_chart_cache": {
+                "raw_data": [
+                    {"logTime": "2026-04-01 00:00:00", "device": "a1_b9", "tag": "ep", "val": 100, "tg": "TG232"},
+                    {"logTime": "2026-04-01 01:00:00", "device": "a1_b9", "tag": "ep", "val": 110, "tg": "TG232"},
+                    {"logTime": "2026-04-01 00:00:00", "device": "b1_b14", "tag": "ep", "val": 30, "tg": "TG233"},
+                    {"logTime": "2026-04-01 01:00:00", "device": "b1_b14", "tag": "ep", "val": 35, "tg": "TG233"},
+                    {"logTime": "2026-04-01 00:00:00", "device": "a2_b3", "tag": "ep", "val": 90, "tg": "TG232"},
+                    {"logTime": "2026-04-01 01:00:00", "device": "a2_b3", "tag": "ep", "val": 92, "tg": "TG232"},
+                ],
+                "statistics": {"avg": 76.17, "count": 6, "trend": "平稳", "change_rate": 0.0, "cv": 0.2, "anomaly_count": 0, "anomaly_ratio": 0.0},
+                "chart_specs": [{"id": "trend-line", "chart_type": "line"}],
+            },
+            "total_duration_ms": 15,
+            "clarification_required": False,
+            "clarification_candidates": None,
+        },
+    ]
+
+    def fake_factory(**_kwargs):
+        call_count["value"] += 1
+        if call_count["value"] > 1:
+            raise AssertionError("button chart follow-up should reuse cache instead of requerying agent")
+
+        class FakeAgent:
+            def run_with_progress(self, _message_with_history):
+                yield from scripted_events
+
+        return FakeAgent()
+
+    monkeypatch.setattr(app_module, "_create_chat_agent", fake_factory)
+
+    with TestClient(app_module.app) as client:
+        first_response = client.post(
+            "/api/chat/stream",
+            json={"message": "对比一下 a1_b9 和 b1_b14 和 a2_b3 的用电量数据", "history": [], "session_id": "button-chart-session"},
+        )
+        second_response = client.post(
+            "/api/chat/stream",
+            json={
+                "message": "帮我画柱状对比图",
+                "history": [],
+                "session_id": "button-chart-session",
+                "chart_follow_up_base_query": "对比一下 a1_b9 和 b1_b14 和 a2_b3 的用电量数据",
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    second_events = _parse_sse_events(second_response.text)
+    complete_event = second_events[-1]
+    assert call_count["value"] == 1
+    assert complete_event["show_charts"] is True
+    assert complete_event["chart_context"]["cache_hit"] is True
+    assert complete_event["chart_specs"][0]["chart_type"] == "bar"
+
+
+def test_chat_stream_button_follow_up_with_base_query_survives_missing_last_query_context() -> None:
+    app_module = _load_app_module()
+    session_id = "button-chart-missing-last-context"
+    base_query = "比较 a1_b9、b1_b14、a2_b3 三个设备的用电情况"
+    session_state = app_module._get_session_state(session_id)
+    session_state["last_sensor_query_context"] = None
+    session_state["last_sensor_result_cache"] = {
+        "base_query": base_query,
+        "query_params": {
+            "device_codes": ["a1_b9", "b1_b14", "a2_b3"],
+            "tg_values": ["TG232", "TG233", "TG232"],
+            "start_time": "2026-04-01",
+            "end_time": "2026-04-03",
+            "data_type": "ep",
+            "user_query": base_query,
+            "comparison_scope_groups": {
+                "a1_b9": [{"device": "a1_b9", "name": "设备1", "project_name": "项目A", "tg": "TG232"}],
+                "b1_b14": [{"device": "b1_b14", "name": "设备2", "project_name": "项目A", "tg": "TG233"}],
+                "a2_b3": [{"device": "a2_b3", "name": "设备3", "project_name": "项目A", "tg": "TG232"}],
+            },
+        },
+        "resolved_scope": None,
+        "analysis": {"mode": "comparison", "metric": "用电量", "unit": "kWh"},
+        "table_type": "sensor_data",
+        "chart_specs": [{"id": "trend-line", "chart_type": "line"}],
+        "statistics": {"avg": 76.17, "count": 6, "trend": "平稳", "change_rate": 0.0, "cv": 0.2, "anomaly_count": 0, "anomaly_ratio": 0.0},
+        "raw_data": [
+            {"logTime": "2026-04-01 00:00:00", "device": "a1_b9", "tag": "ep", "val": 100, "tg": "TG232"},
+            {"logTime": "2026-04-01 01:00:00", "device": "a1_b9", "tag": "ep", "val": 110, "tg": "TG232"},
+            {"logTime": "2026-04-01 00:00:00", "device": "b1_b14", "tag": "ep", "val": 30, "tg": "TG233"},
+            {"logTime": "2026-04-01 01:00:00", "device": "b1_b14", "tag": "ep", "val": 35, "tg": "TG233"},
+            {"logTime": "2026-04-01 00:00:00", "device": "a2_b3", "tag": "ep", "val": 90, "tg": "TG232"},
+            {"logTime": "2026-04-01 01:00:00", "device": "a2_b3", "tag": "ep", "val": 92, "tg": "TG232"},
+        ],
+        "normalized_records": [
+            {"timestamp": "2026-04-01 00:00:00", "device": "a1_b9", "tag": "ep", "value": 100.0, "tg": "TG232"},
+            {"timestamp": "2026-04-01 01:00:00", "device": "a1_b9", "tag": "ep", "value": 110.0, "tg": "TG232"},
+            {"timestamp": "2026-04-01 00:00:00", "device": "b1_b14", "tag": "ep", "value": 30.0, "tg": "TG233"},
+            {"timestamp": "2026-04-01 01:00:00", "device": "b1_b14", "tag": "ep", "value": 35.0, "tg": "TG233"},
+            {"timestamp": "2026-04-01 00:00:00", "device": "a2_b3", "tag": "ep", "value": 90.0, "tg": "TG232"},
+            {"timestamp": "2026-04-01 01:00:00", "device": "a2_b3", "tag": "ep", "value": 92.0, "tg": "TG232"},
+        ],
+        "device_names": {"a1_b9": "设备1", "b1_b14": "设备2", "a2_b3": "设备3"},
+        "chart_context": {
+            "query_kind": "comparison_series",
+            "comparison_slot_count": 3,
+            "comparison_slots": [
+                {"slot_id": "slot_1", "ordinal": 1, "raw_target": "a1_b9", "resolved_device_code": "a1_b9", "resolved_device_name": "设备1", "project_name": "项目A", "tg": "TG232", "status": "resolved"},
+                {"slot_id": "slot_2", "ordinal": 2, "raw_target": "b1_b14", "resolved_device_code": "b1_b14", "resolved_device_name": "设备2", "project_name": "项目A", "tg": "TG233", "status": "resolved"},
+                {"slot_id": "slot_3", "ordinal": 3, "raw_target": "a2_b3", "resolved_device_code": "a2_b3", "resolved_device_name": "设备3", "project_name": "项目A", "tg": "TG232", "status": "resolved"},
+            ],
+        },
+        "updated_at": "2026-04-03T14:00:00",
+    }
+
+    with TestClient(app_module.app) as client:
+        response = client.post(
+            "/api/chat/stream",
+            json={
+                "message": "帮我画柱状对比图",
+                "history": [],
+                "session_id": session_id,
+                "chart_follow_up_base_query": base_query,
+            },
+        )
+
+    assert response.status_code == 200
+    complete_event = _parse_sse_events(response.text)[-1]
+    assert complete_event["success"] is True
+    assert complete_event["show_charts"] is True
+    assert complete_event["chart_context"]["cache_hit"] is True
+    assert complete_event["chart_specs"][0]["chart_type"] == "bar"
+    assert complete_event["chart_specs"][0]["option"]
+
+
+def test_chat_stream_button_follow_up_restores_history_chart_cache_after_restart(monkeypatch) -> None:
+    app_module = _load_app_module()
+    session_id = "button-chart-history-cache-session"
+    base_query = "对比一下 a1_b9 和 b1_b14 和 a2_b3 的用电量数据"
+    call_count = {"value": 0}
+    scripted_events = [
+        {
+            "type": "final_answer",
+            "response": "已完成对比",
+            "show_table": True,
+            "table_type": "sensor_data",
+            "query_params": {
+                "device_codes": ["a1_b9", "b1_b14", "a2_b3"],
+                "tg_values": ["TG232", "TG233", "TG232"],
+                "start_time": "2026-04-01",
+                "end_time": "2026-04-03",
+                "data_type": "ep",
+                "user_query": base_query,
+                "query_plan": {
+                    "comparison_targets": ["a1_b9", "b1_b14", "a2_b3"],
+                    "search_targets": ["a1_b9", "b1_b14", "a2_b3"],
+                },
+                "comparison_scope_groups": {
+                    "a1_b9": [{"device": "a1_b9", "name": "设备1", "project_name": "项目A", "tg": "TG232"}],
+                    "b1_b14": [{"device": "b1_b14", "name": "设备2", "project_name": "项目A", "tg": "TG233"}],
+                    "a2_b3": [{"device": "a2_b3", "name": "设备3", "project_name": "项目A", "tg": "TG232"}],
+                },
+            },
+            "analysis": {"mode": "comparison", "metric": "用电量", "unit": "kWh"},
+            "chart_specs": [{"id": "trend-line", "chart_type": "line"}],
+            "show_charts": False,
+            "table_preview": None,
+            "_chart_cache": {
+                "raw_data": [
+                    {"logTime": "2026-04-01 00:00:00", "device": "a1_b9", "tag": "ep", "val": 100, "tg": "TG232"},
+                    {"logTime": "2026-04-01 01:00:00", "device": "a1_b9", "tag": "ep", "val": 110, "tg": "TG232"},
+                    {"logTime": "2026-04-01 00:00:00", "device": "b1_b14", "tag": "ep", "val": 30, "tg": "TG233"},
+                    {"logTime": "2026-04-01 01:00:00", "device": "b1_b14", "tag": "ep", "val": 35, "tg": "TG233"},
+                    {"logTime": "2026-04-01 00:00:00", "device": "a2_b3", "tag": "ep", "val": 90, "tg": "TG232"},
+                    {"logTime": "2026-04-01 01:00:00", "device": "a2_b3", "tag": "ep", "val": 92, "tg": "TG232"},
+                ],
+                "statistics": {"avg": 76.17, "count": 6, "trend": "平稳", "change_rate": 0.0, "cv": 0.2, "anomaly_count": 0, "anomaly_ratio": 0.0},
+                "chart_specs": [{"id": "trend-line", "chart_type": "line"}],
+            },
+            "total_duration_ms": 15,
+            "clarification_required": False,
+            "clarification_candidates": None,
+        },
+    ]
+
+    def fake_factory(**_kwargs):
+        call_count["value"] += 1
+        if call_count["value"] > 1:
+            raise AssertionError("history chart cache recovery should not requery agent after restart")
+
+        class FakeAgent:
+            def run_with_progress(self, _message_with_history):
+                yield from scripted_events
+
+        return FakeAgent()
+
+    monkeypatch.setattr(app_module, "_create_chat_agent", fake_factory)
+
+    with TestClient(app_module.app) as client:
+        first_response = client.post(
+            "/api/chat/stream",
+            json={"message": base_query, "history": [], "session_id": session_id, "user_id": "anonymous-user"},
+        )
+        assert first_response.status_code == 200
+
+        app_module.SESSION_STATE.clear()
+
+        second_response = client.post(
+            "/api/chat/stream",
+            json={
+                "message": "帮我画柱状对比图",
+                "history": [],
+                "session_id": session_id,
+                "user_id": "anonymous-user",
+                "chart_follow_up_base_query": base_query,
+            },
+        )
+
+    complete_event = _parse_sse_events(second_response.text)[-1]
+    assert call_count["value"] == 1
+    assert complete_event["show_charts"] is True
+    assert complete_event["chart_specs"][0]["chart_type"] == "bar"
+    assert complete_event["chart_context"]["cache_hit"] is True
+    assert complete_event["chart_context"]["cache_restore_mode"] == "history_cache"
+    assert "聊天历史恢复" in complete_event["response"]
+
+
+def test_chat_stream_button_follow_up_rebuilds_history_query_after_restart(monkeypatch) -> None:
+    app_module = _load_app_module()
+    session_id = "button-chart-history-query-session"
+    base_query = "查询 a1_b9 设备今天的电流数据"
+    user_id = "anonymous-user"
+
+    app_module.chat_memory_service.record_chat_message(
+        session_id=session_id,
+        user_id=user_id,
+        role="assistant",
+        message="历史查询结果",
+        intent_type="data_query",
+        message_meta={
+            "response": "历史查询结果",
+            "original_question": base_query,
+            "intent_type": "data_query",
+            "query_params": {
+                "device_codes": ["a1_b9"],
+                "tg_values": ["TG19"],
+                "start_time": "2026-04-03",
+                "end_time": "2026-04-03",
+                "data_type": "i",
+                "page": 1,
+                "page_size": 50,
+                "user_query": base_query,
+            },
+            "analysis": {"mode": "single"},
+            "chart_specs": [],
+            "chart_context": None,
+            "show_charts": False,
+        },
+    )
+    app_module.SESSION_STATE.clear()
+
+    class FakeSensorResult:
+        data = [
+            {"logTime": "2026-04-03 00:00:00", "device": "a1_b9", "tag": "ia", "val": 3.6, "tg": "TG19"},
+            {"logTime": "2026-04-03 00:00:00", "device": "a1_b9", "tag": "ib", "val": 5.0, "tg": "TG19"},
+            {"logTime": "2026-04-03 00:00:00", "device": "a1_b9", "tag": "ic", "val": 3.1, "tg": "TG19"},
+            {"logTime": "2026-04-03 01:00:00", "device": "a1_b9", "tag": "ia", "val": 2.9, "tg": "TG19"},
+            {"logTime": "2026-04-03 01:00:00", "device": "a1_b9", "tag": "ib", "val": 4.8, "tg": "TG19"},
+            {"logTime": "2026-04-03 01:00:00", "device": "a1_b9", "tag": "ic", "val": 3.4, "tg": "TG19"},
+        ]
+        total_count = 6
+        is_sampled = False
+        failed_collections = []
+        query_info = {}
+        statistics = {"avg": 3.8, "count": 6, "trend": "平稳", "change_rate": 0.0, "cv": 0.2, "anomaly_count": 0, "anomaly_ratio": 0.0}
+        page = 1
+        page_size = 0
+        total_pages = 1
+        has_more = False
+
+    monkeypatch.setattr(app_module.data_fetcher, "fetch_sync", lambda **_kwargs: FakeSensorResult())
+    monkeypatch.setattr(app_module.metadata_engine, "list_all_devices", lambda: [])
+    monkeypatch.setattr(
+        app_module,
+        "_create_chat_agent",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("history query rebuild should not invoke chat agent")),
+    )
+
+    with TestClient(app_module.app) as client:
+        response = client.post(
+            "/api/chat/stream",
+            json={
+                "message": "帮我画热力图",
+                "history": [],
+                "session_id": session_id,
+                "user_id": user_id,
+                "chart_follow_up_base_query": base_query,
+            },
+        )
+
+    complete_event = _parse_sse_events(response.text)[-1]
+    assert complete_event["show_charts"] is True
+    assert complete_event["chart_specs"][0]["chart_type"] == "heatmap"
+    assert complete_event["chart_context"]["cache_restore_mode"] == "history_query"
+    assert "重新加载数据" in complete_event["response"]
+
+
+def test_chat_stream_button_follow_up_reuses_cache_when_base_query_only_differs_in_punctuation(monkeypatch) -> None:
+    app_module = _load_app_module()
+    call_count = {"value": 0}
+    scripted_events = [
+        {
+            "type": "final_answer",
+            "response": "已完成对比分析",
+            "show_table": True,
+            "table_type": "sensor_data",
+            "query_params": {
+                "device_codes": ["a1_b9", "b1_b14", "a2_b3"],
+                "data_type": "ep",
+                "start_time": "2026-04-01 00:00:00",
+                "end_time": "2026-04-01 23:59:59",
+                "user_query": "比较 a1_b9、b1_b14、a2_b3 三个设备的用电情况",
+            },
+            "analysis": {"mode": "comparison", "metric": "用电量", "unit": "kWh"},
+            "chart_specs": [{"id": "trend-line", "chart_type": "line"}],
+            "show_charts": False,
+            "table_preview": None,
+            "_chart_cache": {
+                "raw_data": [
+                    {"logTime": "2026-04-01 00:00:00", "device": "a1_b9", "tag": "ep", "val": 100, "tg": "TG232"},
+                    {"logTime": "2026-04-01 01:00:00", "device": "a1_b9", "tag": "ep", "val": 110, "tg": "TG232"},
+                    {"logTime": "2026-04-01 00:00:00", "device": "b1_b14", "tag": "ep", "val": 30, "tg": "TG233"},
+                    {"logTime": "2026-04-01 01:00:00", "device": "b1_b14", "tag": "ep", "val": 35, "tg": "TG233"},
+                    {"logTime": "2026-04-01 00:00:00", "device": "a2_b3", "tag": "ep", "val": 90, "tg": "TG232"},
+                    {"logTime": "2026-04-01 01:00:00", "device": "a2_b3", "tag": "ep", "val": 92, "tg": "TG232"},
+                ],
+                "statistics": {"avg": 76.17, "count": 6, "trend": "平稳", "change_rate": 0.0, "cv": 0.2, "anomaly_count": 0, "anomaly_ratio": 0.0},
+                "chart_specs": [{"id": "trend-line", "chart_type": "line"}],
+            },
+            "total_duration_ms": 15,
+            "clarification_required": False,
+            "clarification_candidates": None,
+        },
+    ]
+
+    def fake_factory(**_kwargs):
+        call_count["value"] += 1
+        if call_count["value"] > 1:
+            raise AssertionError("chart follow-up should reuse cache even when base query punctuation differs")
+
+        class FakeAgent:
+            def run_with_progress(self, _message_with_history):
+                yield from scripted_events
+
+        return FakeAgent()
+
+    monkeypatch.setattr(app_module, "_create_chat_agent", fake_factory)
+
+    with TestClient(app_module.app) as client:
+        first_response = client.post(
+            "/api/chat/stream",
+            json={"message": "比较 a1_b9、b1_b14、a2_b3 三个设备的用电情况", "history": [], "session_id": "button-chart-punctuation-session"},
+        )
+        second_response = client.post(
+            "/api/chat/stream",
+            json={
+                "message": "帮我画柱状对比图",
+                "history": [],
+                "session_id": "button-chart-punctuation-session",
+                "chart_follow_up_base_query": "比较a1_b9,b1_b14,a2_b3三个设备的用电情况",
+            },
+        )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    second_events = _parse_sse_events(second_response.text)
+    complete_event = second_events[-1]
+    assert call_count["value"] == 1
+    assert complete_event["show_charts"] is True
+    assert complete_event["chart_context"]["cache_hit"] is True
+    assert complete_event["chart_specs"][0]["chart_type"] == "bar"

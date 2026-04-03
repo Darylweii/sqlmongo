@@ -90,7 +90,7 @@ _PERIOD_COMPARE_TOKENS = (
 )
 
 
-def _as_tuple(value: Any) -> Tuple[str, ...]:
+def _as_tuple(value: Any, *, dedupe: bool = True) -> Tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, tuple):
@@ -99,16 +99,17 @@ def _as_tuple(value: Any) -> Tuple[str, ...]:
         items = tuple(value)
     else:
         items = (value,)
-    seen = set()
     result = []
+    seen = set()
     for item in items:
         text = str(item or "").strip()
         if not text:
             continue
-        lowered = text.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
+        if dedupe:
+            lowered = text.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
         result.append(text)
     return tuple(result)
 
@@ -268,8 +269,8 @@ def coerce_query_plan(data: Any) -> Optional[QueryPlan]:
         source=str(data.get("source") or "fallback").strip() or "fallback",
         query_mode=query_mode,
         inferred_data_type=str(data.get("inferred_data_type") or "").strip() or None,
-        explicit_device_codes=_as_tuple(data.get("explicit_device_codes")),
-        search_targets=_as_tuple(data.get("search_targets")),
+        explicit_device_codes=_as_tuple(data.get("explicit_device_codes"), dedupe=False),
+        search_targets=_as_tuple(data.get("search_targets"), dedupe=False),
         project_hints=_as_tuple(data.get("project_hints")),
         time_start=_normalize_optional_text(data.get("time_start")),
         time_end=_normalize_optional_text(data.get("time_end")),

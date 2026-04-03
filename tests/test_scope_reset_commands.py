@@ -89,3 +89,47 @@ def test_prepare_chat_context_switch_project_rebinds_alias(monkeypatch) -> None:
     assert context["effective_message"] == "查询 a1_b9 设备今天的电流数据"
     assert context["alias_memory"]["a1_b9"]["project_name"] == "中国能建集团数据机房监控项目"
     assert context["learned_aliases"][0]["project_name"] == "中国能建集团数据机房监控项目"
+
+
+def test_prepare_chat_context_reuses_last_sensor_query_for_chart_follow_up() -> None:
+    app_module = _load_app_module()
+    session_id = "chart-follow-up"
+    state = app_module._get_session_state(session_id)
+    state["last_user_query"] = "查询 a1_b9 设备今天的电流数据"
+    state["last_sensor_query_context"] = {
+        "base_query": "查询 a1_b9 设备今天的电流数据",
+        "analysis_mode": "single",
+    }
+
+    context = app_module._prepare_chat_context(
+        app_module.ChatRequest(
+            message="帮我画张图",
+            history=[],
+            session_id=session_id,
+        )
+    )
+
+    assert context["effective_message"] == "查询 a1_b9 设备今天的电流数据 画图"
+    assert context["chart_follow_up_base_query"] == "查询 a1_b9 设备今天的电流数据"
+
+
+def test_prepare_chat_context_reuses_last_sensor_query_for_affirmative_chart_follow_up() -> None:
+    app_module = _load_app_module()
+    session_id = "chart-follow-up-yes"
+    state = app_module._get_session_state(session_id)
+    state["last_user_query"] = "对比 a1_b9 和 b1_b14 今天的耗电量"
+    state["last_sensor_query_context"] = {
+        "base_query": "对比 a1_b9 和 b1_b14 今天的耗电量",
+        "analysis_mode": "comparison",
+    }
+
+    context = app_module._prepare_chat_context(
+        app_module.ChatRequest(
+            message="可以",
+            history=[],
+            session_id=session_id,
+        )
+    )
+
+    assert context["effective_message"] == "对比 a1_b9 和 b1_b14 今天的耗电量 画图"
+    assert context["chart_follow_up_base_query"] == "对比 a1_b9 和 b1_b14 今天的耗电量"
